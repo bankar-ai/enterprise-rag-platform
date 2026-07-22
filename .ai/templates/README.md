@@ -6,4 +6,6 @@ Populated incrementally by **ERP-002 — Ticket Framework**, **ERP-003 — ADR F
 
 - `ticket.md` — created by ERP-002. In use.
 - `adr.md` — created by ERP-003. In use.
-- Session template does not exist yet; pending ERP-004.
+- `session.md` — created by ERP-004. In use.
+
+All three templates now exist.
