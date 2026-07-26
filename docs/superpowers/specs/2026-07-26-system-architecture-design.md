@@ -17,7 +17,7 @@ All dependencies must be open-source and free to use. Paid or proprietary APIs/s
 **API Layer** (FastAPI) — routes only validate requests, call the service layer, and return responses; no business logic lives here (existing principle in `docs/architecture.md`). Includes authentication middleware.
 
 **Service Layer** — one feature-oriented module per capability:
-- *Ingestion Service* — parses PDF/DOCX/PPTX, runs OCR where needed, chunks text, generates embeddings, writes chunk text+metadata to Postgres and vectors to FAISS/BM25.
+- *Ingestion Service* — scoped to **PDF only** for now: parses PDF documents, chunks text, generates embeddings, writes chunk text+metadata to Postgres and vectors to FAISS/BM25. DOCX, PPTX, and OCR support (already listed in `docs/roadmap.md`) are future work, added as separate parser modules behind the same Ingestion Service interface once PDF ingestion is solid.
 - *Retrieval Service* — hybrid retrieval: FAISS dense search + BM25 sparse search, merged via Reciprocal Rank Fusion (RRF), refined by a cross-encoder reranker, extended later with PageIndex-inspired retrieval and multi-document retrieval.
 - *Generation Service* — builds prompts from retrieved chunks + conversation history, calls Ollama (Qwen3) for inference, supports streaming responses and conversation memory.
 - *Evaluation Service* — runs offline/async evaluation of completed conversations (e.g. via an open-source framework such as Ragas), writes scores to Postgres. Framework choice is not decided here.
@@ -38,7 +38,7 @@ All dependencies must be open-source and free to use. Paid or proprietary APIs/s
 
 **Ingestion** (upload → searchable):
 1. Client uploads a document → API Layer validates request + auth → calls Ingestion Service.
-2. Ingestion Service parses the file (PDF/DOCX/PPTX/OCR) and chunks the text.
+2. Ingestion Service parses the file (PDF only, for now) and chunks the text.
 3. Each chunk is embedded (Nomic Embed), checking the Redis embedding cache first by content hash.
 4. Chunk text + metadata are written to Postgres; chunk vectors to FAISS; the BM25 index is updated on disk — all keyed by the same chunk ID.
 5. Observability logs parse time, chunk count, and embedding time; the API returns document ID + status.
