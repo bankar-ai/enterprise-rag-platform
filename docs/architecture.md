@@ -124,4 +124,4 @@ IDE
 
 ## Architecture Diagram
 
-The full target-state architecture — API layer, service layer, data layer, core/infra, cross-cutting concerns, and deployment — is diagrammed in `docs/diagrams/architecture.drawio` (source, editable in [draw.io](https://app.diagrams.net/)) and `docs/diagrams/architecture.png` (exported image). Components not yet built are shown dashed/grey; components that exist today are shown solid/green. See `docs/superpowers/specs/2026-07-26-system-architecture-design.md` for the design rationale.
+The full target-state architecture — API layer, service layer, data layer, core/infra, cross-cutting concerns, and deployment — is diagrammed in `docs/diagrams/architecture.drawio` (source, editable in [draw.io](https://app.diagrams.net/)) and `docs/diagrams/architecture.png` (exported image — pending, see ERP-009). Components not yet built are shown dashed/grey; components that exist today are shown solid/green. See `docs/superpowers/specs/2026-07-26-system-architecture-design.md` for the design rationale.
