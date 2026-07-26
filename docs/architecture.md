@@ -70,6 +70,8 @@ Use dependency injection whenever appropriate.
 
 Prefer composition over inheritance.
 
+All dependencies must be open-source and free to use. Paid or proprietary APIs/services (hosted LLMs, managed vector DBs, paid embedding APIs, etc.) are out of scope unless explicitly approved as an exception.
+
 ## Technology Stack
 
 Operating System
