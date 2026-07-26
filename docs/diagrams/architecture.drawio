@@ -1,137 +1,220 @@
 <mxfile host="app.diagrams.net">
   <diagram name="System Architecture" id="erp-system-architecture">
-    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="1000" math="0" shadow="0">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="850" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
         <mxCell id="client" value="Client" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="700" y="20" width="160" height="40" as="geometry" />
+          <mxGeometry x="760" y="20" width="200" height="40" as="geometry" />
         </mxCell>
 
         <mxCell id="api" value="API Layer (FastAPI)&#10;Auth Middleware" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="680" y="100" width="200" height="60" as="geometry" />
+          <mxGeometry x="740" y="110" width="240" height="60" as="geometry" />
         </mxCell>
 
         <mxCell id="ing" value="Ingestion Service&#10;(PDF only, for now)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="60" y="220" width="180" height="60" as="geometry" />
+          <mxGeometry x="40" y="250" width="200" height="70" as="geometry" />
         </mxCell>
 
         <mxCell id="ret" value="Retrieval Service&#10;(BM25 + FAISS + RRF + Rerank)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="280" y="220" width="220" height="60" as="geometry" />
+          <mxGeometry x="300" y="250" width="220" height="70" as="geometry" />
         </mxCell>
 
         <mxCell id="gen" value="Generation Service&#10;(Ollama, streaming, memory)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="540" y="220" width="220" height="60" as="geometry" />
+          <mxGeometry x="580" y="250" width="220" height="70" as="geometry" />
         </mxCell>
 
         <mxCell id="eval" value="Evaluation Service" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="800" y="220" width="180" height="60" as="geometry" />
+          <mxGeometry x="880" y="250" width="200" height="70" as="geometry" />
         </mxCell>
 
         <mxCell id="embed" value="Nomic Embed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="60" y="330" width="180" height="50" as="geometry" />
+          <mxGeometry x="160" y="400" width="200" height="60" as="geometry" />
         </mxCell>
 
         <mxCell id="ollama" value="Ollama (Qwen3)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="540" y="330" width="180" height="50" as="geometry" />
+          <mxGeometry x="580" y="400" width="200" height="60" as="geometry" />
         </mxCell>
 
         <mxCell id="pg" value="PostgreSQL&#10;(users, chat history,&#10;chunk metadata, eval results)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="60" y="430" width="200" height="70" as="geometry" />
+          <mxGeometry x="40" y="560" width="200" height="80" as="geometry" />
         </mxCell>
 
         <mxCell id="faiss" value="FAISS&#10;(vector index)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="280" y="430" width="160" height="70" as="geometry" />
+          <mxGeometry x="300" y="560" width="160" height="80" as="geometry" />
         </mxCell>
 
         <mxCell id="bm25" value="BM25 Index&#10;(on-disk)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="460" y="430" width="160" height="70" as="geometry" />
+          <mxGeometry x="500" y="560" width="160" height="80" as="geometry" />
         </mxCell>
 
         <mxCell id="redis" value="Redis&#10;(cache-aside: embeddings,&#10;query results, sessions)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="640" y="430" width="200" height="70" as="geometry" />
+          <mxGeometry x="720" y="560" width="200" height="80" as="geometry" />
         </mxCell>
 
         <mxCell id="obs" value="Observability&#10;(structured logging,&#10;metrics/tracing)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="200" width="180" height="300" as="geometry" />
+          <mxGeometry x="1180" y="230" width="200" height="410" as="geometry" />
         </mxCell>
 
         <mxCell id="docker" value="Docker&#10;(app + Postgres + Redis)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="60" y="560" width="200" height="60" as="geometry" />
+          <mxGeometry x="40" y="720" width="200" height="60" as="geometry" />
         </mxCell>
 
         <mxCell id="cicd" value="GitHub Actions CI/CD&#10;(ERP-008, built)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
-          <mxGeometry x="300" y="560" width="200" height="60" as="geometry" />
+          <mxGeometry x="300" y="720" width="220" height="60" as="geometry" />
         </mxCell>
 
-        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="client" target="api">
+        <!-- Client -> API -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="client" target="api">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="api" target="ing">
+
+        <!-- API -> Ingestion / Retrieval -->
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.15;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="ing">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="api" target="ret">
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="ret">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ret" target="gen">
+
+        <!-- Retrieval -> Generation -->
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=1;exitY=0.4;exitDx=0;exitDy=0;entryX=0;entryY=0.4;entryDx=0;entryDy=0;" edge="1" parent="1" source="ret" target="gen">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ing" target="embed">
+
+        <!-- Ingestion / Retrieval -> Nomic Embed -->
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.1;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ing" target="embed">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ret" target="embed">
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.1;exitY=1;exitDx=0;exitDy=0;entryX=0.9;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ret" target="embed">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="embed" target="faiss">
+
+        <!-- Nomic Embed -> FAISS -->
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="embed" target="faiss">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ing" target="pg">
+
+        <!-- Ingestion -> Postgres (clean vertical lane left of Embed) -->
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.2;exitY=1;exitDx=0;exitDy=0;entryX=0.1;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ing" target="pg">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ing" target="bm25">
+
+        <!-- Ingestion -> BM25 (staggered corridor y=485) -->
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.95;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ing" target="bm25">
+          <Array as="points">
+            <mxPoint x="228" y="485" />
+            <mxPoint x="548" y="485" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ret" target="faiss">
+
+        <!-- Retrieval -> FAISS / BM25 (short clean hops, kept clear of Embed's right edge) -->
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.4;exitY=1;exitDx=0;exitDy=0;entryX=0.6;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ret" target="faiss">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ret" target="bm25">
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.85;exitY=1;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ret" target="bm25">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ret" target="redis">
+
+        <!-- Retrieval -> Redis (staggered corridor y=495) -->
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ret" target="redis">
+          <Array as="points">
+            <mxPoint x="552" y="495" />
+            <mxPoint x="764" y="495" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="ret" target="pg">
+
+        <!-- Retrieval -> Postgres (staggered corridor y=505) -->
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.05;exitY=1;exitDx=0;exitDy=0;entryX=0.55;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ret" target="pg">
+          <Array as="points">
+            <mxPoint x="311" y="505" />
+            <mxPoint x="150" y="505" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="gen" target="ollama">
+
+        <!-- Generation -> Ollama (direct, same column) -->
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gen" target="ollama">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="gen" target="pg">
+
+        <!-- Generation -> Postgres (staggered corridor y=515) -->
+        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.05;exitY=1;exitDx=0;exitDy=0;entryX=0.8;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gen" target="pg">
+          <Array as="points">
+            <mxPoint x="591" y="515" />
+            <mxPoint x="200" y="515" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="gen" target="redis">
+
+        <!-- Generation -> Redis (right-side vertical lane between Generation and Evaluation) -->
+        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=1;exitY=0.3;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gen" target="redis">
+          <Array as="points">
+            <mxPoint x="850" y="271" />
+            <mxPoint x="850" y="520" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="eval" target="pg">
+
+        <!-- Evaluation -> Postgres (routed around the right and bottom margins, well clear of every other box) -->
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.2;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="eval" target="pg">
+          <Array as="points">
+            <mxPoint x="1000" y="340" />
+            <mxPoint x="1000" y="670" />
+            <mxPoint x="140" y="670" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="obs" target="api">
+
+        <!-- Observability -> API (routed through the gap above the Service Layer row) -->
+        <mxCell id="e18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;exitX=0;exitY=0.02;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="obs" target="api">
+          <Array as="points">
+            <mxPoint x="1130" y="238" />
+            <mxPoint x="1130" y="190" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="obs" target="ing">
+
+        <!-- Observability -> Ingestion / Retrieval / Generation (staggered parallel lanes through the gap below the Service Layer row, entering each box from the bottom so they never cross the row itself) -->
+        <mxCell id="e19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;exitX=0;exitY=0.15;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="obs" target="ing">
+          <Array as="points">
+            <mxPoint x="1130" y="291" />
+            <mxPoint x="1130" y="340" />
+            <mxPoint x="140" y="340" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="obs" target="ret">
+        <mxCell id="e20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;exitX=0;exitY=0.22;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="obs" target="ret">
+          <Array as="points">
+            <mxPoint x="1130" y="320" />
+            <mxPoint x="1130" y="350" />
+            <mxPoint x="410" y="350" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="obs" target="gen">
+        <mxCell id="e21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;exitX=0;exitY=0.29;exitDx=0;exitDy=0;entryX=0.7;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="obs" target="gen">
+          <Array as="points">
+            <mxPoint x="1130" y="349" />
+            <mxPoint x="1130" y="360" />
+            <mxPoint x="734" y="360" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="cicd" target="docker">
+
+        <!-- CI/CD -> Docker (adjacent, same row) -->
+        <mxCell id="e22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cicd" target="docker">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;" edge="1" parent="1" source="docker" target="api">
+
+        <!-- Docker -> API (routed along the far-left margin, clear of every other component) -->
+        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;exitX=0;exitY=0.3;exitDx=0;exitDy=0;entryX=0;entryY=0.8;entryDx=0;entryDy=0;" edge="1" parent="1" source="docker" target="api">
+          <Array as="points">
+            <mxPoint x="15" y="738" />
+            <mxPoint x="15" y="158" />
+          </Array>
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
