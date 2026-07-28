@@ -33,6 +33,10 @@ Before introducing a new dependency:
 
 Avoid dependency bloat.
 
+## Research Before Recommending
+
+Before recommending a library, framework, or methodology for anything in a fast-evolving domain (ML/LLM/RAG tooling, embedding models, parsers, vector stores, etc.), research current options and benchmarks (e.g. via web search) rather than relying solely on prior/cached knowledge — this ecosystem changes fast enough that last year's best-practice answer can be wrong today. Present the findings (with sources), the trade-offs, and a recommendation, then let the user decide. Do this even when a default answer seems obvious: the user may not know the current landscape either, and a blind recommendation risks costly rework later.
+
 ## Git Workflow
 
 Commit frequently. Each commit represents one logical change. Use Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`). Never commit broken code.
