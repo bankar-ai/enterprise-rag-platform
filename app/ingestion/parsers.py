@@ -17,11 +17,11 @@ def needs_fallback(fast_pages: list[dict], ocr_text_threshold: int) -> bool:
     for page in fast_pages:
         if len(page["text"].strip()) < ocr_text_threshold:
             return True
-        # Table signal has two possible shapes depending on pymupdf4llm mode:
-        # a dedicated "tables" list (legacy/non-layout mode), or layout-mode's
-        # "page_boxes" list of region dicts, some of which may have class "table".
-        if len(page.get("tables") or []) > 0:
-            return True
+        # pymupdf4llm defaults to its layout-analysis engine (no config in this
+        # codebase switches it to legacy/non-layout mode), whose page_chunks
+        # output represents detected regions as a "page_boxes" list of dicts
+        # with a "class" field (e.g. "table", "section-header") rather than a
+        # dedicated "tables" key. Table presence is therefore detected here.
         if any(box.get("class") == "table" for box in (page.get("page_boxes") or [])):
             return True
     return False

@@ -15,15 +15,26 @@ def test_needs_fallback_true_for_low_text_page():
 
 
 def test_needs_fallback_true_when_table_detected():
+    # Real pymupdf4llm (layout-analysis mode, the installed default) represents
+    # detected regions as "page_boxes" entries with a "class" field, e.g. one
+    # with class "table" for a detected table region.
     fast_pages = [
-        {"text": "plenty of readable text here to pass the threshold check", "tables": [{"bbox": [0, 0, 1, 1]}], "metadata": {"page_number": 1}}
+        {
+            "text": "plenty of readable text here to pass the threshold check",
+            "page_boxes": [{"index": 0, "class": "table", "bbox": (0, 0, 1, 1), "pos": (0, 10)}],
+            "metadata": {"page_number": 1},
+        }
     ]
     assert needs_fallback(fast_pages, ocr_text_threshold=20) is True
 
 
 def test_needs_fallback_false_for_normal_text_page():
     fast_pages = [
-        {"text": "plenty of readable text here to pass the threshold check", "tables": [], "metadata": {"page_number": 1}}
+        {
+            "text": "plenty of readable text here to pass the threshold check",
+            "page_boxes": [{"index": 0, "class": "section-header", "bbox": (0, 0, 1, 1), "pos": (0, 10)}],
+            "metadata": {"page_number": 1},
+        }
     ]
     assert needs_fallback(fast_pages, ocr_text_threshold=20) is False
 
