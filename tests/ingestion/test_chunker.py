@@ -47,3 +47,31 @@ def test_empty_page_produces_no_chunks():
     pages = [{"text": "", "page_number": 1}]
     chunks = chunk_markdown(pages, _settings())
     assert chunks == []
+
+
+def test_page_numbers_not_starting_at_one_with_multiple_headers_on_one_page():
+    # Regression test: a single page containing more than one header (h1 title followed
+    # by an h2 subsection) used to get split into multiple sections by
+    # MarkdownHeaderTextSplitter, but a marker-based page-tracking scheme could only ever
+    # attach the page number to the LAST of those sections — earlier sections on the same
+    # page silently fell back to page 1 regardless of the document's actual page numbers.
+    # Using page numbers that don't start at 1 (5 and 6) makes that wrong fallback visible:
+    # a bug that defaults to "page 1" is indistinguishable from a correct answer when the
+    # real first page happens to be 1.
+    pages = [
+        {"text": "# Title\nIntro text.\n## Section One\nBody of section one.", "page_number": 5},
+        {"text": "## Section Two\nBody of section two.", "page_number": 6},
+    ]
+    chunks = chunk_markdown(pages, _settings())
+
+    intro = next(c for c in chunks if "intro text" in c["text"].lower())
+    assert intro["page_start"] == 5
+    assert intro["page_end"] == 5
+
+    section_one = next(c for c in chunks if "section one" in c["text"].lower())
+    assert section_one["page_start"] == 5
+    assert section_one["page_end"] == 5
+
+    section_two = next(c for c in chunks if "section two" in c["text"].lower())
+    assert section_two["page_start"] == 6
+    assert section_two["page_end"] == 6
