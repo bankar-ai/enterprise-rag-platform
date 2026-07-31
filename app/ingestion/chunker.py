@@ -43,18 +43,30 @@ def _locate(needle: str, haystack: str, search_from: int) -> int:
     """Find `needle` in `haystack` at or after `search_from`.
 
     Text splitters (MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter) slice
-    verbatim substrings of their input, so an exact match should always be found. A
-    forward-advancing cursor keeps the search anchored to document order even when
-    RecursiveCharacterTextSplitter produces overlapping pieces (the cursor only needs
-    to advance past the *start* of the previous match, not its end, to keep finding
-    correctly ordered results while still allowing backward overlap).
+    verbatim substrings of their input, so an exact match at or after `search_from`
+    should always be found. A forward-advancing cursor keeps the search anchored to
+    document order even when RecursiveCharacterTextSplitter produces overlapping
+    pieces (the cursor only needs to advance past the *start* of the previous match,
+    not its end, to keep finding correctly ordered results while still allowing
+    backward overlap).
+
+    This function fails loudly rather than silently returning a wrong offset: an
+    unanchored fallback would risk matching an unrelated occurrence of `needle`
+    elsewhere in the document (plausible with duplicate/near-duplicate boilerplate
+    text), and returning -1 for callers to use directly in offset arithmetic would
+    produce a silently-wrong page range — the exact defect class this offset-based
+    design was meant to eliminate. If the anchored search ever misses, that means a
+    text splitter modified content in a way this module doesn't expect, and page
+    tracking can no longer be trusted, so we raise instead of guessing.
     """
     idx = haystack.find(needle, search_from)
-    if idx != -1:
-        return idx
-    # Should not happen given splitters preserve substrings verbatim, but fall back to
-    # an unanchored search rather than silently mis-locating content.
-    return haystack.find(needle)
+    if idx == -1:
+        raise ValueError(
+            "chunker: could not locate expected substring in the document at or after "
+            "the expected offset; the text splitter may have altered the text in a way "
+            "that breaks character-offset-based page tracking"
+        )
+    return idx
 
 
 def chunk_markdown(pages: list[dict], settings: IngestionSettings) -> list[dict]:
