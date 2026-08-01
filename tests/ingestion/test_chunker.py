@@ -49,6 +49,42 @@ def test_empty_page_produces_no_chunks():
     assert chunks == []
 
 
+def test_multi_paragraph_section_does_not_break_chunking():
+    # Regression test for a Critical whole-branch-review finding: MarkdownHeaderTextSplitter
+    # reconstructs page_content for any section spanning more than one line by joining lines
+    # with "  \n" (aggregate_lines_to_chunks) rather than preserving the original document's
+    # actual newlines/whitespace, and it strips every line. That means section.page_content
+    # is NOT a verbatim substring of the original concatenated document for any multi-line
+    # section, which broke the old substring-offset-based page-tracking (_locate would raise
+    # ValueError, aborting ingestion for essentially all real PDFs). Realistic PDFs almost
+    # always have multi-paragraph sections, so this needed a fixture beyond the single-line
+    # sections every prior test used.
+    pages = [
+        {
+            "text": (
+                "# Title\n"
+                "First paragraph of the intro.\n"
+                "Second paragraph of the intro.\n"
+                "\n"
+                "Third paragraph after a blank line."
+            ),
+            "page_number": 1,
+        }
+    ]
+    chunks = chunk_markdown(pages, _settings())
+
+    assert len(chunks) >= 1
+    combined = " ".join(c["text"] for c in chunks)
+    assert "First paragraph of the intro." in combined
+    assert "Second paragraph of the intro." in combined
+    assert "Third paragraph after a blank line." in combined
+    for chunk in chunks:
+        assert chunk["page_start"] == 1
+        assert chunk["page_end"] == 1
+        # No internal splitter artifacts (e.g. the "  \n" joiner) should leak into chunk text.
+        assert "  \n" not in chunk["text"]
+
+
 def test_page_numbers_not_starting_at_one_with_multiple_headers_on_one_page():
     # Regression test: a single page containing more than one header (h1 title followed
     # by an h2 subsection) used to get split into multiple sections by

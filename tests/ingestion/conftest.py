@@ -17,6 +17,25 @@ def simple_text_pdf(tmp_path):
 
 
 @pytest.fixture
+def multi_paragraph_pdf(tmp_path):
+    """A one-page PDF with a heading and several lines of body text spanning multiple
+    paragraphs (with a blank-line gap) — realistic input that a single-line fixture can't
+    exercise, since MarkdownHeaderTextSplitter reconstructs multi-line section content
+    rather than preserving it verbatim.
+    """
+    path = tmp_path / "multi_paragraph.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Introduction", fontsize=18)
+    page.insert_text((72, 100), "First paragraph of the intro, line one.", fontsize=11)
+    page.insert_text((72, 118), "First paragraph of the intro, line two.", fontsize=11)
+    page.insert_text((72, 150), "Second paragraph after a visual gap.", fontsize=11)
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+@pytest.fixture
 def table_pdf(tmp_path):
     """A one-page PDF with a drawn grid (table) — should trigger the quality fallback."""
     path = tmp_path / "table.pdf"
