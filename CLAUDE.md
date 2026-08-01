@@ -19,6 +19,8 @@ Never use `pip install` / `pip uninstall`. Never assume globally installed Pytho
 
 Never hardcode API keys, passwords, secrets, or tokens. Always load configuration from environment variables. Never commit secrets to Git.
 
+This is enforced automatically, not just a policy statement: a Gitleaks pre-commit hook (`.pre-commit-config.yaml`) blocks commits containing secret-shaped strings, and CI runs the same check as a backstop. After cloning, run `uv run pre-commit install` once to activate the local hook (see ADR-004, ERP-010).
+
 ## Logging
 
 Use structured logging. Never use `print()` inside application code — it's acceptable only for local debugging and must be removed before commit.
@@ -32,6 +34,10 @@ Before introducing a new dependency:
 3. Introduce a new dependency only if it provides significant value — explain why, and wait for approval.
 
 Avoid dependency bloat.
+
+## Research Before Recommending
+
+Before recommending a library, framework, or methodology for anything in a fast-evolving domain (ML/LLM/RAG tooling, embedding models, parsers, vector stores, etc.), research current options and benchmarks (e.g. via web search) rather than relying solely on prior/cached knowledge — this ecosystem changes fast enough that last year's best-practice answer can be wrong today. Present the findings (with sources), the trade-offs, and a recommendation, then let the user decide. Do this even when a default answer seems obvious: the user may not know the current landscape either, and a blind recommendation risks costly rework later.
 
 ## Git Workflow
 

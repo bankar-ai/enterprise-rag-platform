@@ -4,4 +4,23 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "docling>=2.117.0",
+    "fastapi>=0.141.1",
+    "langchain-text-splitters>=1.1.2",
+    "pydantic-settings>=2.14.2",
+    "pymupdf4llm>=1.28.0",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.52.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pre-commit>=4.6.1",
+    "pymupdf>=1.28.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

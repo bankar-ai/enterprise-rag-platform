@@ -1,0 +1,113 @@
+from app.ingestion.chunker import chunk_markdown
+from app.ingestion.config import IngestionSettings
+
+
+def _settings(**overrides):
+    return IngestionSettings(**{"chunk_size": 1500, "chunk_overlap": 200, "ocr_text_threshold": 20, **overrides})
+
+
+def test_splits_on_headers_and_tracks_page_range():
+    pages = [
+        {"text": "# Title\nIntro text.\n## Section One\nBody of section one.", "page_number": 1},
+        {"text": "## Section Two\nBody of section two.", "page_number": 2},
+    ]
+    chunks = chunk_markdown(pages, _settings())
+
+    assert len(chunks) >= 2
+    section_one = next(c for c in chunks if "section one" in c["text"].lower())
+    assert section_one["page_start"] == 1
+    assert section_one["page_end"] == 1
+    assert section_one["section_path"] == ["Title", "Section One"]
+
+    section_two = next(c for c in chunks if "section two" in c["text"].lower())
+    assert section_two["page_start"] == 2
+    assert section_two["page_end"] == 2
+
+
+def test_no_page_marker_leaks_into_chunk_text():
+    pages = [{"text": "# Title\nSome body text here.", "page_number": 1}]
+    chunks = chunk_markdown(pages, _settings())
+    for chunk in chunks:
+        assert "page:" not in chunk["text"]
+        assert "<!--" not in chunk["text"]
+
+
+def test_large_section_is_split_by_char_limit_with_overlap():
+    long_body = "word " * 800  # ~4000 chars, well over a small chunk_size
+    pages = [{"text": f"# Title\n{long_body}", "page_number": 1}]
+    chunks = chunk_markdown(pages, _settings(chunk_size=500, chunk_overlap=50))
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk["char_count"] <= 500 + 50  # allow overlap slack
+        assert chunk["char_count"] == len(chunk["text"])
+
+
+def test_empty_page_produces_no_chunks():
+    pages = [{"text": "", "page_number": 1}]
+    chunks = chunk_markdown(pages, _settings())
+    assert chunks == []
+
+
+def test_multi_paragraph_section_does_not_break_chunking():
+    # Regression test for a Critical whole-branch-review finding: MarkdownHeaderTextSplitter
+    # reconstructs page_content for any section spanning more than one line by joining lines
+    # with "  \n" (aggregate_lines_to_chunks) rather than preserving the original document's
+    # actual newlines/whitespace, and it strips every line. That means section.page_content
+    # is NOT a verbatim substring of the original concatenated document for any multi-line
+    # section, which broke the old substring-offset-based page-tracking (_locate would raise
+    # ValueError, aborting ingestion for essentially all real PDFs). Realistic PDFs almost
+    # always have multi-paragraph sections, so this needed a fixture beyond the single-line
+    # sections every prior test used.
+    pages = [
+        {
+            "text": (
+                "# Title\n"
+                "First paragraph of the intro.\n"
+                "Second paragraph of the intro.\n"
+                "\n"
+                "Third paragraph after a blank line."
+            ),
+            "page_number": 1,
+        }
+    ]
+    chunks = chunk_markdown(pages, _settings())
+
+    assert len(chunks) >= 1
+    combined = " ".join(c["text"] for c in chunks)
+    assert "First paragraph of the intro." in combined
+    assert "Second paragraph of the intro." in combined
+    assert "Third paragraph after a blank line." in combined
+    for chunk in chunks:
+        assert chunk["page_start"] == 1
+        assert chunk["page_end"] == 1
+        # No internal splitter artifacts (e.g. the "  \n" joiner) should leak into chunk text.
+        assert "  \n" not in chunk["text"]
+
+
+def test_page_numbers_not_starting_at_one_with_multiple_headers_on_one_page():
+    # Regression test: a single page containing more than one header (h1 title followed
+    # by an h2 subsection) used to get split into multiple sections by
+    # MarkdownHeaderTextSplitter, but a marker-based page-tracking scheme could only ever
+    # attach the page number to the LAST of those sections — earlier sections on the same
+    # page silently fell back to page 1 regardless of the document's actual page numbers.
+    # Using page numbers that don't start at 1 (5 and 6) makes that wrong fallback visible:
+    # a bug that defaults to "page 1" is indistinguishable from a correct answer when the
+    # real first page happens to be 1.
+    pages = [
+        {"text": "# Title\nIntro text.\n## Section One\nBody of section one.", "page_number": 5},
+        {"text": "## Section Two\nBody of section two.", "page_number": 6},
+    ]
+    chunks = chunk_markdown(pages, _settings())
+
+    intro = next(c for c in chunks if "intro text" in c["text"].lower())
+    assert intro["page_start"] == 5
+    assert intro["page_end"] == 5
+
+    section_one = next(c for c in chunks if "section one" in c["text"].lower())
+    assert section_one["page_start"] == 5
+    assert section_one["page_end"] == 5
+
+    section_two = next(c for c in chunks if "section two" in c["text"].lower())
+    assert section_two["page_start"] == 6
+    assert section_two["page_end"] == 6
