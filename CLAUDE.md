@@ -78,6 +78,16 @@ Start most work in Plan Mode. Before implementing any feature:
 7. Summarize every modified file after implementation.
 8. Suggest further improvements, but do not implement them without approval.
 
+## Session & Context Continuity
+
+Before assuming anything about prior work — especially at the start of a new conversation, or after a long one — read `.ai/memory/current-state.md` and the most recent file(s) in `.ai/sessions/` first. Treat them as authoritative over assumed continuity from chat history alone: chat context can be stale, incomplete, or (in a long session) compacted, but these files are the durable, curated record.
+
+At natural checkpoints — finishing a feature, before a merge, end of a significant piece of work — do two things, not one:
+1. Write a new file in `.ai/sessions/` (`YYYY-MM-DD-<slug>.md`, using `.ai/templates/session.md`) summarizing what was decided and built.
+2. Update `.ai/memory/current-state.md` in place to match reality.
+
+Both were skipped for an entire feature slice once already (2026-08-01) — don't let that repeat. A stale `current-state.md` is worse than no `current-state.md`, since it actively misleads.
+
 ## AI Assistant Behaviour
 
 Always: produce production-quality code, explain architectural decisions, use modern Python with type hints, keep functions focused, minimize dependencies, write maintainable code.

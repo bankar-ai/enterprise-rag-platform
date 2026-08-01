@@ -6,4 +6,4 @@ Distinct from `.ai/memory/`, which holds living context that gets updated in pla
 
 The session format is defined in **ERP-004 — Session Framework**. Use the template at `.ai/templates/session.md` to create new sessions, named `YYYY-MM-DD-<slug>.md`.
 
-First entry: `2026-07-22-ticket-and-adr-frameworks.md`.
+Entries: `2026-07-22-ticket-and-adr-frameworks.md`, `2026-08-01-github-setup-architecture-diagram-pdf-ingestion-slice.md`.
