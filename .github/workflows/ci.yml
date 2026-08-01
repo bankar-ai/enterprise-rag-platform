@@ -18,6 +18,9 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Scan for secrets (gitleaks)
+        run: uv run pre-commit run gitleaks --all-files
+
       - name: Run tests
         # exit code 5 = no tests collected yet; tolerate until tests/ has content
         run: uv run pytest || [ $? -eq 5 ]

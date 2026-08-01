@@ -19,6 +19,8 @@ Never use `pip install` / `pip uninstall`. Never assume globally installed Pytho
 
 Never hardcode API keys, passwords, secrets, or tokens. Always load configuration from environment variables. Never commit secrets to Git.
 
+This is enforced automatically, not just a policy statement: a Gitleaks pre-commit hook (`.pre-commit-config.yaml`) blocks commits containing secret-shaped strings, and CI runs the same check as a backstop. After cloning, run `uv run pre-commit install` once to activate the local hook (see ADR-004, ERP-010).
+
 ## Logging
 
 Use structured logging. Never use `print()` inside application code — it's acceptable only for local debugging and must be removed before commit.
