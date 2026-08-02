@@ -1,6 +1,6 @@
 # Engineering Guidelines
 
-> Status note: ERP-007 configured Ruff and Mypy to enforce the items below marked **[tooling candidate: ruff ...]** or **[tooling candidate: mypy]** — see `.pre-commit-config.yaml` and `.github/workflows/ci.yml`. Items still marked **[tooling candidate]** without an enforcing tool remain prose-only, pending ERP-006's broader guidelines review.
+> Status note: ERP-007 configured Ruff and Mypy, and ERP-006 added a `pytest-cov` coverage gate and a Logging convention — see `.pre-commit-config.yaml` and `.github/workflows/ci.yml` for what's enforced. Every item that can reasonably be enforced by tooling now is; anything without an `[enforced: ...]` marker is a principle that's inherently a matter of judgment (e.g. "prefer readability"), not a gap awaiting a future ticket.
 
 ## Engineering Principles
 
@@ -30,6 +30,8 @@ Use
 - Pydantic v2
 - Google-style docstrings **[enforced: ruff `D` rules, google convention]**
 
+API routes must only validate input and call the service layer — see `docs/architecture.md`'s Architecture Principles for the full rule.
+
 Functions should remain small.
 
 Variable names should be descriptive.
@@ -48,9 +50,21 @@ Provide actionable error messages.
 
 Log unexpected failures.
 
+## Logging
+
+Use Python's standard `logging` module — no third-party logging library at this project's current scale.
+
+Every module that logs gets its own logger: `logger = logging.getLogger(__name__)` at module level.
+
+Any `except` block that does not re-raise must call `logger.exception(...)` before handling the failure, so the traceback is captured. See `app/ingestion/jobs.py`'s `run_ingestion_job` for the pattern.
+
+Never log full request/response bodies or secrets. Log identifiers (job IDs, filenames) and error messages.
+
+Never use `print()` in application code — see `CLAUDE.md`.
+
 ## Testing
 
-Every business logic module should have unit tests. **[tooling candidate: coverage threshold in pytest/CI]**
+Every business logic module should have unit tests. **[enforced: pytest-cov, `--cov-fail-under=90`]**
 
 Prefer pytest.
 
