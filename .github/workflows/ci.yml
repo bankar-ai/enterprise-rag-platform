@@ -21,6 +21,11 @@ jobs:
       - name: Scan for secrets (gitleaks)
         run: uv run pre-commit run gitleaks --all-files
 
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type check (mypy)
+        run: uv run mypy app
+
       - name: Run tests
-        # exit code 5 = no tests collected yet; tolerate until tests/ has content
-        run: uv run pytest || [ $? -eq 5 ]
+        run: uv run pytest

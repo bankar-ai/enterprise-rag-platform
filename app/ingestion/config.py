@@ -1,9 +1,13 @@
+"""Ingestion settings, loaded from environment variables."""
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class IngestionSettings(BaseSettings):
+    """Configuration for the PDF ingestion pipeline, overridable via `INGESTION_*` env vars."""
+
     model_config = SettingsConfigDict(env_prefix="INGESTION_")
 
     chunk_size: int = 1500
@@ -14,4 +18,5 @@ class IngestionSettings(BaseSettings):
 
 @lru_cache
 def get_settings() -> IngestionSettings:
+    """Return the process-wide cached `IngestionSettings` instance."""
     return IngestionSettings()

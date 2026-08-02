@@ -1,3 +1,5 @@
+"""The ingestion service: orchestrates parsing and chunking a PDF into `Chunk`s."""
+
 import uuid
 
 from app.ingestion.chunker import chunk_markdown
@@ -7,6 +9,7 @@ from app.ingestion.schemas import Chunk, IngestResponse
 
 
 def ingest_pdf(pdf_path: str, source_filename: str, settings: IngestionSettings) -> IngestResponse:
+    """Parse and chunk a PDF at `pdf_path`, returning provenance-tagged chunks."""
     document_id = str(uuid.uuid4())
     pages, parser_used = parse_pdf(pdf_path, settings)
     raw_chunks = chunk_markdown(pages, settings)

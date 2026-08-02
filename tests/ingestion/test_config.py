@@ -1,5 +1,3 @@
-import os
-
 from app.ingestion.config import IngestionSettings, get_settings
 
 

@@ -1,3 +1,7 @@
+"""Structure-aware Markdown chunking: split on headers, then by character limit."""
+
+from typing import Any
+
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 from app.ingestion.config import IngestionSettings
@@ -9,26 +13,29 @@ _HEADERS_TO_SPLIT_ON = [("#", "h1"), ("##", "h2"), ("###", "h3")]
 _HEADER_LEVEL_ORDER = {key: index for index, (_, key) in enumerate(_HEADERS_TO_SPLIT_ON)}
 
 
-def _build_document(pages: list[dict]) -> str:
+def _build_document(pages: list[dict[str, Any]]) -> str:
     """Concatenate page texts (no inline markers) into one document for the header splitter."""
     return "\n\n".join(page["text"] for page in pages)
 
 
 def _normalize_line(line: str) -> str:
-    """Apply the exact transform MarkdownHeaderTextSplitter applies to each line before
-    using it as page_content: `.strip()`, then drop non-printable characters. Applying the
+    """Apply the exact transform MarkdownHeaderTextSplitter applies to each line before.
+
+    Uses it as page_content: `.strip()`, then drop non-printable characters. Applying the
     same transform to our reference line index lets us match lines by equality instead of
     by verbatim substring search.
     """
     return "".join(filter(str.isprintable, line.strip()))
 
 
-def _build_line_index(pages: list[dict]) -> list[tuple[str, int]]:
-    """Build an ordered, flat list of (normalized_line_text, page_number) for every
-    non-blank line of every page, in document order. This is the reference MarkdownHeaderTextSplitter's
-    reconstructed section.page_content lines are matched against, since page_content is no
-    longer a verbatim substring of the original document once a section spans more than one
-    line (aggregate_lines_to_chunks joins lines with "  \\n" and split_text strips every line).
+def _build_line_index(pages: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    r"""Build an ordered, flat list of (normalized_line_text, page_number) for every line.
+
+    Covers every non-blank line of every page, in document order. This is what the
+    reference MarkdownHeaderTextSplitter's reconstructed section.page_content lines are
+    matched against, since page_content is no longer a verbatim substring of the original
+    document once a section spans more than one line (aggregate_lines_to_chunks joins
+    lines with "  \n" and split_text strips every line).
     """
     line_index: list[tuple[str, int]] = []
     for page in pages:
@@ -40,8 +47,9 @@ def _build_line_index(pages: list[dict]) -> list[tuple[str, int]]:
 
 
 def _locate_line(line: str, line_index: list[tuple[str, int]], search_from: int) -> int:
-    """Find `line` in `line_index` at or after `search_from`, by equality (not substring
-    search) since `line_index` entries are already normalized whole lines.
+    """Find `line` in `line_index` at or after `search_from`, by equality.
+
+    Not substring search, since `line_index` entries are already normalized whole lines.
 
     Fails loudly rather than silently defaulting a page number: MarkdownHeaderTextSplitter
     never merges, reorders, or invents lines, so every normalized line coming out of a
@@ -62,12 +70,13 @@ def _locate_line(line: str, line_index: list[tuple[str, int]], search_from: int)
 def _section_page_range(
     section_content: str, line_index: list[tuple[str, int]], cursor: int
 ) -> tuple[tuple[int, int], int]:
-    """Determine the (page_start, page_end) of a header section by matching its
-    constituent lines (split back out of the reconstructed page_content, then normalized
-    the same way as `line_index`) against the reference line index with a forward-advancing
-    cursor. Returns the page range plus the cursor position to resume from for the next
-    section, preserving document order while tolerating duplicate lines elsewhere in the
-    document.
+    """Determine the (page_start, page_end) of a header section.
+
+    Matches its constituent lines (split back out of the reconstructed page_content, then
+    normalized the same way as `line_index`) against the reference line index with a
+    forward-advancing cursor. Returns the page range plus the cursor position to resume
+    from for the next section, preserving document order while tolerating duplicate lines
+    elsewhere in the document.
     """
     section_lines = [_normalize_line(line) for line in section_content.split("\n")]
     section_lines = [line for line in section_lines if line]
@@ -83,7 +92,8 @@ def _section_page_range(
     return (min(pages_found), max(pages_found)), cursor
 
 
-def chunk_markdown(pages: list[dict], settings: IngestionSettings) -> list[dict]:
+def chunk_markdown(pages: list[dict[str, Any]], settings: IngestionSettings) -> list[dict[str, Any]]:
+    """Split `pages` into structure-aware chunks: by header first, then by character limit."""
     full_text = _build_document(pages)
     if not full_text.strip():
         return []
@@ -98,11 +108,12 @@ def chunk_markdown(pages: list[dict], settings: IngestionSettings) -> list[dict]
         chunk_overlap=settings.chunk_overlap,
     )
 
-    chunks: list[dict] = []
+    chunks: list[dict[str, Any]] = []
     line_cursor = 0
     for section in header_sections:
         section_path = [
-            section.metadata[key] for key in sorted(section.metadata, key=lambda key: _HEADER_LEVEL_ORDER[key])
+            section.metadata[key]
+            for key in sorted(section.metadata, key=lambda key: _HEADER_LEVEL_ORDER[key])
         ]
 
         page_range, line_cursor = _section_page_range(section.page_content, line_index, line_cursor)

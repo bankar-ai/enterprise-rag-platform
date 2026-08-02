@@ -1,3 +1,5 @@
+"""In-memory async ingestion job tracking (no persistent queue; single-process only)."""
+
 import threading
 import uuid
 
@@ -10,13 +12,17 @@ _lock = threading.Lock()
 
 
 class JobRecord:
+    """Mutable state for one tracked ingestion job."""
+
     def __init__(self) -> None:
+        """Initialize a new job in PENDING status with no result or error yet."""
         self.status: JobStatus = JobStatus.PENDING
         self.result: IngestResponse | None = None
         self.error: str | None = None
 
 
 def create_job() -> str:
+    """Register a new PENDING job and return its ID."""
     job_id = str(uuid.uuid4())
     with _lock:
         _jobs[job_id] = JobRecord()
@@ -24,11 +30,13 @@ def create_job() -> str:
 
 
 def get_job(job_id: str) -> JobRecord | None:
+    """Look up a job by ID, or None if it doesn't exist."""
     with _lock:
         return _jobs.get(job_id)
 
 
 def run_ingestion_job(job_id: str, pdf_path: str, filename: str, settings: IngestionSettings) -> None:
+    """Run ingestion for `job_id`, recording DONE + result or FAILED + error on the job record."""
     with _lock:
         _jobs[job_id].status = JobStatus.PROCESSING
 

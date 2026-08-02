@@ -1,6 +1,6 @@
 # Engineering Guidelines
 
-> Status note: this document currently describes standards in prose only. ERP-006 will review and strengthen these guidelines once the repository has real code and tooling in place. ERP-007 will configure the tooling (ruff, mypy, pytest, pre-commit) that can enforce the items marked **[tooling candidate]** below, rather than relying on documentation alone.
+> Status note: ERP-007 configured Ruff and Mypy to enforce the items below marked **[tooling candidate: ruff ...]** or **[tooling candidate: mypy]** — see `.pre-commit-config.yaml` and `.github/workflows/ci.yml`. Items still marked **[tooling candidate]** without an enforcing tool remain prose-only, pending ERP-006's broader guidelines review.
 
 ## Engineering Principles
 
@@ -26,9 +26,9 @@ Every function should ideally have one responsibility.
 
 Use
 
-- Python type hints **[tooling candidate: mypy]**
+- Python type hints **[enforced: mypy --strict on `app/`]**
 - Pydantic v2
-- Google-style docstrings **[tooling candidate: ruff docstring rules]**
+- Google-style docstrings **[enforced: ruff `D` rules, google convention]**
 
 Functions should remain small.
 
@@ -36,11 +36,11 @@ Variable names should be descriptive.
 
 Avoid single-character variable names except for loops.
 
-Never suppress warnings unless absolutely necessary. **[tooling candidate: ruff/mypy config disallowing blanket suppressions]**
+Never suppress warnings unless absolutely necessary. **[enforced: ruff `PGH003`/`PGH004` ban blanket `# type: ignore` / `# noqa`]**
 
 ## Error Handling
 
-Never silently ignore exceptions. **[tooling candidate: ruff bare-except rules]**
+Never silently ignore exceptions. **[enforced: ruff `BLE001`]**
 
 Raise meaningful exceptions.
 

@@ -1,3 +1,5 @@
+"""Ingestion API: PDF upload (async job) and job-status polling."""
+
 import shutil
 import tempfile
 from pathlib import Path
@@ -15,9 +17,14 @@ _COPY_CHUNK_SIZE = 1024 * 1024
 
 
 @router.post("/pdf", status_code=status.HTTP_202_ACCEPTED)
-async def upload_pdf(file: UploadFile = File(...), background_tasks: BackgroundTasks = None) -> dict:
+async def upload_pdf(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+) -> dict[str, str]:
+    """Validate and stream an uploaded PDF to disk, then schedule an async ingestion job."""
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="File must be a PDF (content-type application/pdf)")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Uploaded file must have a filename")
 
     header = await file.read(5)
     if header != _PDF_MAGIC:
@@ -52,6 +59,7 @@ async def upload_pdf(file: UploadFile = File(...), background_tasks: BackgroundT
 
 @router.get("/jobs/{job_id}")
 def get_job_status(job_id: str) -> JobStatusResponse:
+    """Return the current status (and result or error, once finished) of an ingestion job."""
     record = jobs.get_job(job_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Job not found")

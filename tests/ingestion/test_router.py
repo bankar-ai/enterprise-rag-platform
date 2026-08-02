@@ -44,6 +44,27 @@ def test_upload_pdf_rejects_file_without_pdf_header():
     assert response.status_code == 400
 
 
+def test_upload_pdf_rejects_missing_filename():
+    # httpx's `files=` shorthand drops the `filename` param entirely when it's empty,
+    # which makes the part look like a plain form field and 422s before reaching our
+    # code. A raw multipart body with an explicit empty `filename=""` is required to
+    # actually deliver an UploadFile with a falsy filename to the handler.
+    body = (
+        b"--boundary\r\n"
+        b'Content-Disposition: form-data; name="file"; filename=""\r\n'
+        b"Content-Type: application/pdf\r\n\r\n"
+        + _PDF_MAGIC
+        + b"rest\r\n"
+        b"--boundary--\r\n"
+    )
+    response = client.post(
+        "/ingestion/pdf",
+        content=body,
+        headers={"Content-Type": "multipart/form-data; boundary=boundary"},
+    )
+    assert response.status_code == 400
+
+
 def test_upload_and_poll_simple_pdf(simple_text_pdf):
     pdf_bytes = _read_fixture_bytes(simple_text_pdf)
     response = client.post(
