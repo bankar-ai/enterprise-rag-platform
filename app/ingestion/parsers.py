@@ -1,4 +1,6 @@
-from typing import Literal
+"""PDF parsing: a fast native-text path with a slower quality (tables/OCR) fallback."""
+
+from typing import Any, Literal, cast
 
 import pymupdf4llm
 from docling.document_converter import DocumentConverter
@@ -8,12 +10,13 @@ from app.ingestion.config import IngestionSettings
 _PAGE_BREAK = "\n\n<!-- docling-page-break -->\n\n"
 
 
-def parse_fast(pdf_path: str) -> list[dict]:
+def parse_fast(pdf_path: str) -> list[dict[str, Any]]:
     """Raw PyMuPDF4LLM page_chunks output — used for both extraction and fallback routing."""
-    return pymupdf4llm.to_markdown(pdf_path, page_chunks=True)
+    return cast(list[dict[str, Any]], pymupdf4llm.to_markdown(pdf_path, page_chunks=True))
 
 
-def needs_fallback(fast_pages: list[dict], ocr_text_threshold: int) -> bool:
+def needs_fallback(fast_pages: list[dict[str, Any]], ocr_text_threshold: int) -> bool:
+    """Decide whether a document needs the quality (Docling) parse instead of the fast path."""
     for page in fast_pages:
         if len(page["text"].strip()) < ocr_text_threshold:
             return True
@@ -27,7 +30,7 @@ def needs_fallback(fast_pages: list[dict], ocr_text_threshold: int) -> bool:
     return False
 
 
-def parse_quality(pdf_path: str) -> list[dict]:
+def parse_quality(pdf_path: str) -> list[dict[str, Any]]:
     """Docling parse (quality path: better tables + OCR). Returns {"text", "page_number"} dicts."""
     converter = DocumentConverter()
     result = converter.convert(pdf_path)
@@ -38,7 +41,10 @@ def parse_quality(pdf_path: str) -> list[dict]:
     ]
 
 
-def parse_pdf(pdf_path: str, settings: IngestionSettings) -> tuple[list[dict], Literal["fast", "quality"]]:
+def parse_pdf(
+    pdf_path: str, settings: IngestionSettings
+) -> tuple[list[dict[str, Any]], Literal["fast", "quality"]]:
+    """Parse a PDF, using the fast path unless `needs_fallback` routes to the quality path."""
     fast_pages = parse_fast(pdf_path)
 
     if needs_fallback(fast_pages, settings.ocr_text_threshold):
