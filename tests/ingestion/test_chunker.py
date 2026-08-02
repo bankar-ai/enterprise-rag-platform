@@ -3,7 +3,8 @@ from app.ingestion.config import IngestionSettings
 
 
 def _settings(**overrides):
-    return IngestionSettings(**{"chunk_size": 1500, "chunk_overlap": 200, "ocr_text_threshold": 20, **overrides})
+    defaults = {"chunk_size": 1500, "chunk_overlap": 200, "ocr_text_threshold": 20}
+    return IngestionSettings(**{**defaults, **overrides})
 
 
 def test_splits_on_headers_and_tracks_page_range():

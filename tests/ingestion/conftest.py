@@ -10,7 +10,9 @@ def simple_text_pdf(tmp_path):
     doc = fitz.open()
     page = doc.new_page()
     page.insert_text((72, 72), "Introduction", fontsize=18)
-    page.insert_text((72, 100), "This is a simple paragraph of body text for testing extraction.", fontsize=11)
+    page.insert_text(
+        (72, 100), "This is a simple paragraph of body text for testing extraction.", fontsize=11
+    )
     doc.save(str(path))
     doc.close()
     return str(path)
@@ -18,10 +20,11 @@ def simple_text_pdf(tmp_path):
 
 @pytest.fixture
 def multi_paragraph_pdf(tmp_path):
-    """A one-page PDF with a heading and several lines of body text spanning multiple
-    paragraphs (with a blank-line gap) — realistic input that a single-line fixture can't
-    exercise, since MarkdownHeaderTextSplitter reconstructs multi-line section content
-    rather than preserving it verbatim.
+    """A one-page PDF with a heading and several lines of body text spanning multiple paragraphs.
+
+    Includes a blank-line gap — realistic input that a single-line fixture can't exercise,
+    since MarkdownHeaderTextSplitter reconstructs multi-line section content rather than
+    preserving it verbatim.
     """
     path = tmp_path / "multi_paragraph.pdf"
     doc = fitz.open()
@@ -45,7 +48,9 @@ def table_pdf(tmp_path):
     x0, y0, cell_w, cell_h = 72, 100, 100, 30
     for row in range(2):
         for col in range(2):
-            rect = fitz.Rect(x0 + col * cell_w, y0 + row * cell_h, x0 + (col + 1) * cell_w, y0 + (row + 1) * cell_h)
+            rect = fitz.Rect(
+                x0 + col * cell_w, y0 + row * cell_h, x0 + (col + 1) * cell_w, y0 + (row + 1) * cell_h
+            )
             page.draw_rect(rect)
             page.insert_text((rect.x0 + 5, rect.y0 + 20), f"R{row}C{col}", fontsize=10)
     doc.save(str(path))
