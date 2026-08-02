@@ -38,3 +38,12 @@ def test_run_ingestion_job_marks_failed_on_bad_path():
     assert record.status == JobStatus.FAILED
     assert record.result is None
     assert record.error is not None
+
+
+def test_run_ingestion_job_logs_on_failure(caplog):
+    job_id = create_job()
+    with caplog.at_level("ERROR"):
+        run_ingestion_job(job_id, "/no/such/file.pdf", "missing.pdf", _settings())
+
+    assert any(job_id in record.message for record in caplog.records)
+    assert any(record.levelname == "ERROR" for record in caplog.records)
