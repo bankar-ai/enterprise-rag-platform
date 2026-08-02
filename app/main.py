@@ -1,3 +1,5 @@
+"""FastAPI application entrypoint."""
+
 from fastapi import FastAPI
 
 from app.ingestion.router import router as ingestion_router
