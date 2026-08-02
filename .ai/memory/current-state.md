@@ -16,7 +16,7 @@ Living summary of what exists in this repository right now. Update in place as s
 - Ruff (lint) and Mypy (`--strict`, scoped to `app/`) are configured (ERP-007): Ruff runs via `pre-commit` and CI, Mypy via CI only. `app/` and `tests/` are fully compliant. `docs/engineering-guidelines.md` marks the now-enforced items accordingly.
 - Pytest coverage gate is enforced (ERP-006): `pytest-cov`, `--cov-fail-under=90` in CI. A logging convention (stdlib `logging`, module-level loggers, `logger.exception` on non-re-raising excepts) is defined in `docs/engineering-guidelines.md` and applied to `app/ingestion/jobs.py`'s previously-silent failure path.
 - **First vertical slice of application code exists and is live on `main`**: `app/ingestion/` — a PDF ingestion pipeline (`POST /ingestion/pdf` job-based upload, `GET /ingestion/jobs/{job_id}` polling). PyMuPDF4LLM fast-path parsing with automatic Docling fallback (tables/OCR). Structure-aware Markdown chunking with full provenance metadata (page range, section path, parser used). Scoped to parse + chunk only — no embedding, no persistence yet. Full test suite under `tests/ingestion/` (33 tests, ~98.6% coverage), all passing in CI.
-- PR #1 (`develop` → `main`) merged 2026-08-01. PR #2 (`develop` → `main`, secrets-scanning guardrail + ruff/mypy tooling) merged 2026-08-02.
+- PR #1 (`develop` → `main`) merged 2026-08-01. PR #2 (`develop` → `main`, secrets-scanning guardrail + ruff/mypy tooling) merged 2026-08-02. ERP-006 (pytest coverage gate + logging convention, see item above) merged `develop` → `main` 2026-08-02; `develop` and `main` are in sync with a clean working tree.
 
 ## What Does Not Exist Yet
 
@@ -26,6 +26,5 @@ Living summary of what exists in this repository right now. Update in place as s
 
 ## Next Planned Work
 
-- Merge this session's ERP-006 work (`develop` → `main`, same PR pattern as before).
 - Embedding generation + Postgres/FAISS/BM25 persistence (the next vertical slice).
 - Consider requiring CI status checks in `main`'s branch protection, now that CI gives real signal (ruff, mypy, pytest+coverage, gitleaks).
