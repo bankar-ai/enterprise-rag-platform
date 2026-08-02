@@ -14,18 +14,18 @@ Living summary of what exists in this repository right now. Update in place as s
 - GitHub repository setup is done (ERP-008): `main` (protected, default branch) + `develop` branch model, CI (`.github/workflows/ci.yml`: gitleaks scan + `pytest`, verified actually green — not just present), PR template.
 - Automated secrets-scanning guardrail is live (ERP-010): Gitleaks via `pre-commit`, local hook + CI backstop, verified to actually block a real secret.
 - Ruff (lint) and Mypy (`--strict`, scoped to `app/`) are configured (ERP-007): Ruff runs via `pre-commit` and CI, Mypy via CI only. `app/` and `tests/` are fully compliant. `docs/engineering-guidelines.md` marks the now-enforced items accordingly.
-- **First vertical slice of application code exists and is live on `main`**: `app/ingestion/` — a PDF ingestion pipeline (`POST /ingestion/pdf` job-based upload, `GET /ingestion/jobs/{job_id}` polling). PyMuPDF4LLM fast-path parsing with automatic Docling fallback (tables/OCR). Structure-aware Markdown chunking with full provenance metadata (page range, section path, parser used). Scoped to parse + chunk only — no embedding, no persistence yet. Full test suite under `tests/ingestion/` (31 tests), all passing in CI.
-- PR #1 (`develop` → `main`) merged 2026-08-01.
+- Pytest coverage gate is enforced (ERP-006): `pytest-cov`, `--cov-fail-under=90` in CI. A logging convention (stdlib `logging`, module-level loggers, `logger.exception` on non-re-raising excepts) is defined in `docs/engineering-guidelines.md` and applied to `app/ingestion/jobs.py`'s previously-silent failure path.
+- **First vertical slice of application code exists and is live on `main`**: `app/ingestion/` — a PDF ingestion pipeline (`POST /ingestion/pdf` job-based upload, `GET /ingestion/jobs/{job_id}` polling). PyMuPDF4LLM fast-path parsing with automatic Docling fallback (tables/OCR). Structure-aware Markdown chunking with full provenance metadata (page range, section path, parser used). Scoped to parse + chunk only — no embedding, no persistence yet. Full test suite under `tests/ingestion/` (33 tests, ~98.6% coverage), all passing in CI.
+- PR #1 (`develop` → `main`) merged 2026-08-01. PR #2 (`develop` → `main`, secrets-scanning guardrail + ruff/mypy tooling) merged 2026-08-02.
 
 ## What Does Not Exist Yet
 
 - No embedding generation, no Postgres/FAISS/BM25 persistence — the ingestion slice stops at chunking, by design (next vertical slice).
 - No retrieval or generation code at all yet.
-- Engineering guidelines are prose-only, not yet enforced by tooling beyond secrets-scanning — pending ERP-006.
-- Branch protection on `main` does not yet require CI status checks to pass (no `required_status_checks` configured) — ERP-007 has landed with real CI checks (ruff, mypy, pytest, gitleaks) that could now be made required; not yet done.
+- Branch protection on `main` does not yet require CI status checks to pass (no `required_status_checks` configured) — CI now enforces ruff, mypy, pytest+coverage, and gitleaks, so this could be made required; not yet done.
 
 ## Next Planned Work
 
+- Merge this session's ERP-006 work (`develop` → `main`, same PR pattern as before).
 - Embedding generation + Postgres/FAISS/BM25 persistence (the next vertical slice).
-- ERP-006 (review/strengthen engineering guidelines) — now unblocked (ERP-007 is done), since real application code exists to review guidelines against.
-- Consider requiring CI status checks in `main`'s branch protection, now that ERP-007 gives CI real signal (ruff, mypy, pytest, gitleaks).
+- Consider requiring CI status checks in `main`'s branch protection, now that CI gives real signal (ruff, mypy, pytest+coverage, gitleaks).

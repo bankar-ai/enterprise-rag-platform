@@ -1,11 +1,14 @@
 """In-memory async ingestion job tracking (no persistent queue; single-process only)."""
 
+import logging
 import threading
 import uuid
 
 from app.ingestion.config import IngestionSettings
 from app.ingestion.schemas import IngestResponse, JobStatus
 from app.ingestion.service import ingest_pdf
+
+logger = logging.getLogger(__name__)
 
 _jobs: dict[str, "JobRecord"] = {}
 _lock = threading.Lock()
@@ -43,6 +46,7 @@ def run_ingestion_job(job_id: str, pdf_path: str, filename: str, settings: Inges
     try:
         result = ingest_pdf(pdf_path, filename, settings)
     except Exception as exc:  # noqa: BLE001 - job failure is reported via status, not raised
+        logger.exception("Ingestion job %s failed for file %r", job_id, filename)
         with _lock:
             _jobs[job_id].status = JobStatus.FAILED
             _jobs[job_id].error = str(exc)
