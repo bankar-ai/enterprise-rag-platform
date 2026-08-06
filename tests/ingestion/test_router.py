@@ -2,13 +2,40 @@
 import io
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.embedding.client import OllamaEmbeddingClient
+from app.embedding.config import get_embedding_settings
 from app.ingestion.config import get_settings
 from app.main import app
 
 client = TestClient(app)
 _PDF_MAGIC = b"%PDF-"
+
+
+@pytest.fixture(autouse=True)
+def _stub_embedding_backend(monkeypatch, tmp_path):
+    """Stub the Ollama call and redirect the FAISS index to a temp path for every test here.
+
+    `POST /ingestion/pdf` schedules `run_ingestion_job` with its production defaults (no
+    injected `embedding_client`/`faiss_index` — see `app/ingestion/router.py`), so without
+    this, these end-to-end tests would make a real network call to Ollama (unavailable in
+    CI, per the design's "no live Ollama required" testing intent) and write to the repo's
+    real `data/faiss_index.bin`.
+    """
+    monkeypatch.setenv("EMBEDDING_FAISS_INDEX_PATH", str(tmp_path / "router_test_index.bin"))
+    get_embedding_settings.cache_clear()
+
+    def _fake_embed(self, texts):
+        dimension = get_embedding_settings().dimension
+        return [[0.1] * dimension for _ in texts]
+
+    monkeypatch.setattr(OllamaEmbeddingClient, "embed", _fake_embed)
+    try:
+        yield
+    finally:
+        get_embedding_settings.cache_clear()
 
 
 def _read_fixture_bytes(path: str) -> bytes:
