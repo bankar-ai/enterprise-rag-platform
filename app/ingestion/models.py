@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import JSON, ForeignKey, Identity, Text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 
@@ -19,7 +19,6 @@ class DocumentRecord(Base):
     document_id: Mapped[str] = mapped_column(primary_key=True)
     filename: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    chunks: Mapped[list["ChunkRecord"]] = relationship("ChunkRecord", back_populates="document")
 
 
 class ChunkRecord(Base):
@@ -42,4 +41,3 @@ class ChunkRecord(Base):
     parser_used: Mapped[str]
     source_filename: Mapped[str]
     vector_id: Mapped[int] = mapped_column(Identity(always=True), unique=True)
-    document: Mapped["DocumentRecord"] = relationship("DocumentRecord", back_populates="chunks")

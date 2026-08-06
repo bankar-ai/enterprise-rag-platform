@@ -14,6 +14,7 @@ def save_document_and_chunks(
     Does not commit — the caller controls the transaction boundary.
     """
     session.add(DocumentRecord(document_id=document_id, filename=source_filename))
+    session.flush()
 
     records = [
         ChunkRecord(
