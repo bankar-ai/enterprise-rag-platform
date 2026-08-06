@@ -37,9 +37,11 @@ Following the existing feature-oriented structure:
 New settings, loaded the same pydantic-settings way as `IngestionSettings` today:
 
 - `DATABASE_URL` — Postgres connection string.
-- `OLLAMA_HOST` — Ollama server address (default `http://localhost:11434`).
+- `EMBEDDING_OLLAMA_HOST` — Ollama server address (default `http://localhost:11434`).
 - `EMBEDDING_MODEL` — default `nomic-embed-text`.
-- `FAISS_INDEX_PATH` — local file path for the persisted index.
+- `EMBEDDING_FAISS_INDEX_PATH` — local file path for the persisted index.
+
+As implemented, `app/embedding/config.py`'s `EmbeddingSettings` uses `env_prefix="EMBEDDING_"`, so every field is overridable via an `EMBEDDING_`-prefixed env var (`EMBEDDING_OLLAMA_HOST`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION`, `EMBEDDING_FAISS_INDEX_PATH`) rather than the bare names. This is a deliberate deviation from an earlier draft of this spec — it avoids collisions with any future non-embedding use of `OLLAMA_HOST` or `FAISS_INDEX_PATH`.
 
 ## Infra
 
@@ -62,3 +64,9 @@ Requires approval per the dependency policy — none of these are satisfiable vi
 - `psycopg[binary]` — Postgres driver.
 - `ollama` — official Python client for the local Ollama server, already the project's chosen LLM/embedding runtime.
 - `faiss-cpu` — already named as the project's vector store in `docs/architecture.md`; `faiss-cpu` is the correct PyPI package for a CPU-only, non-GPU deployment target.
+
+## Known Limitations
+
+**Concurrent FAISS index writes can silently drop vectors.** `run_ingestion_job` runs under FastAPI's `BackgroundTasks`, which executes in a threadpool, so two PDF uploads can be ingested concurrently. `app/embedding/index.py`'s `FaissIndex` loads the whole index file on construction, adds vectors in memory, and writes the whole file back on `save()`. If two jobs' `FaissIndex` instances are live at once, the second `save()` overwrites the first, and the first job's vectors are lost from the on-disk index (though the corresponding Postgres rows and `vector_id`s remain). At current single-process/low-scale usage this is accepted as-is; the retrieval slice that comes next should design its FAISS access pattern (e.g. a single long-lived index guarded by a lock, or a different index/write strategy) with this constraint in mind rather than assuming today's read-modify-write-whole-file approach is safe under concurrency.
+
+**Non-atomic write across Postgres and FAISS.** `app/embedding/service.py`'s `embed_and_persist` commits the Postgres transaction (chunk rows with assigned `vector_id`s) before writing those vectors to the FAISS index. If the FAISS write fails, or the process crashes between the commit and `faiss_index.save()`, Postgres is left with chunk rows whose `vector_id`s have no corresponding vector in FAISS — an orphaned-chunk inconsistency with no reconciliation path today. This is accepted as a known gap rather than fixed now (a proper fix would need either a two-phase/outbox-style write or a reconciliation job); it should be revisited when the retrieval slice starts relying on FAISS/Postgres agreeing.

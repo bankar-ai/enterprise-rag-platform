@@ -19,7 +19,7 @@ def save_document_and_chunks(
     records = [
         ChunkRecord(
             chunk_id=chunk.chunk_id,
-            document_id=chunk.document_id,
+            document_id=document_id,
             chunk_index=chunk.chunk_index,
             text=chunk.text,
             section_path=chunk.section_path,
