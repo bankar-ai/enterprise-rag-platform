@@ -34,3 +34,11 @@ def save_document_and_chunks(
     session.add_all(records)
     session.flush()
     return records
+
+
+def get_chunks_by_vector_ids(session: Session, vector_ids: list[int]) -> dict[int, ChunkRecord]:
+    """Fetch chunk rows by their `vector_id`s, keyed by `vector_id`. `{}` for empty input."""
+    if not vector_ids:
+        return {}
+    rows = session.query(ChunkRecord).filter(ChunkRecord.vector_id.in_(vector_ids)).all()
+    return {row.vector_id: row for row in rows}
