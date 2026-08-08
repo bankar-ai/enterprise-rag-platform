@@ -4,21 +4,6 @@ import pytest
 
 
 @pytest.fixture
-def simple_text_pdf(tmp_path):
-    """A one-page PDF with a heading and body text — should stay on the fast path."""
-    path = tmp_path / "simple.pdf"
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "Introduction", fontsize=18)
-    page.insert_text(
-        (72, 100), "This is a simple paragraph of body text for testing extraction.", fontsize=11
-    )
-    doc.save(str(path))
-    doc.close()
-    return str(path)
-
-
-@pytest.fixture
 def multi_paragraph_pdf(tmp_path):
     """A one-page PDF with a heading and several lines of body text spanning multiple paragraphs.
 
