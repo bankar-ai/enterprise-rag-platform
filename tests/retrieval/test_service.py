@@ -1,3 +1,5 @@
+import pytest
+
 from app.core.db import get_session_factory
 from app.embedding.config import EmbeddingSettings
 from app.embedding.index import FaissIndex
@@ -96,3 +98,47 @@ def test_search_top_k_larger_than_available_returns_all(tmp_path):
     )
 
     assert len(results) == 1
+
+
+def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, caplog):
+    document_id = "doc-search-test-3"
+    chunks = [_chunk(document_id, 0)]
+    vectors = [[1.0, 0.0, 0.0, 0.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    vector_ids = _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    # Index a vector_id that was never persisted to Postgres, simulating the two stores
+    # having diverged (see ERP-011's "Known Limitations": writes are not atomic).
+    orphan_vector_id = 999_999_999
+    faiss_index.add([orphan_vector_id], [[1.0, 0.0, 0.0, 0.0]])
+    faiss_index.save()
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    with caplog.at_level("WARNING"):
+        results = search(
+            query="find it",
+            top_k=10,
+            settings=EmbeddingSettings(dimension=4),
+            embedding_client=fake_client,
+            faiss_index=faiss_index,
+        )
+
+    assert len(results) == 1
+    assert results[0].chunk_id == f"{document_id}-0"
+    assert vector_ids[0] != orphan_vector_id
+    assert any(str(orphan_vector_id) in record.message for record in caplog.records)
+
+
+def test_search_raises_when_embedding_client_returns_no_vectors(tmp_path):
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    fake_client.embed = lambda texts: []  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="no vectors"):
+        search(
+            query="anything",
+            top_k=5,
+            settings=EmbeddingSettings(dimension=4),
+            embedding_client=fake_client,
+            faiss_index=faiss_index,
+        )

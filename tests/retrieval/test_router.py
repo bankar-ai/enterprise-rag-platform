@@ -47,6 +47,18 @@ def test_query_rejects_top_k_out_of_bounds():
     assert response.status_code == 422
 
 
+def test_query_returns_503_when_embedding_backend_unavailable(monkeypatch):
+    def _raise_embed(self, texts):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(OllamaEmbeddingClient, "embed", _raise_embed)
+
+    response = client.post("/retrieval/query", json={"query": "anything"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Embedding backend unavailable"}
+
+
 def test_query_returns_ingested_chunk(simple_text_pdf):
     with open(simple_text_pdf, "rb") as pdf_file:
         upload = client.post(

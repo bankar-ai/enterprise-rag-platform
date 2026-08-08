@@ -1,11 +1,15 @@
 """Semantic search over ingested chunks: embed a query, search FAISS, hydrate from Postgres."""
 
+import logging
+
 from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
 from app.ingestion.repository import get_chunks_by_vector_ids
 from app.retrieval.schemas import RetrievedChunk
+
+logger = logging.getLogger(__name__)
 
 
 def search(
@@ -26,6 +30,8 @@ def search(
     faiss_index = faiss_index or FaissIndex(settings.faiss_index_path, settings.dimension)
 
     vectors = embedding_client.embed([query])
+    if not vectors:
+        raise ValueError("embedding client returned no vectors for the query")
     hits = faiss_index.search(vectors[0], top_k)
     if not hits:
         return []
@@ -37,6 +43,7 @@ def search(
         for vector_id, distance in hits:
             chunk = chunks_by_vector_id.get(vector_id)
             if chunk is None:
+                logger.warning("Dropping FAISS hit with no matching chunk row: vector_id=%s", vector_id)
                 continue
             results.append(
                 RetrievedChunk(
