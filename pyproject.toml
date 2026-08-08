@@ -5,12 +5,17 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.19.0",
     "docling>=2.117.0",
+    "faiss-cpu>=1.15.0",
     "fastapi>=0.141.1",
     "langchain-text-splitters>=1.1.2",
+    "ollama>=0.6.2",
+    "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.14.2",
     "pymupdf4llm>=1.28.0",
     "python-multipart>=0.0.32",
+    "sqlalchemy>=2.0.51",
     "uvicorn>=0.52.0",
 ]
 
@@ -31,6 +36,7 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+extend-exclude = ["alembic"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "D", "BLE", "PGH"]
@@ -50,4 +56,12 @@ strict = true
 
 [[tool.mypy.overrides]]
 module = "pymupdf4llm"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "faiss"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "ollama"
 ignore_missing_imports = true

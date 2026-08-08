@@ -15,17 +15,18 @@ Living summary of what exists in this repository right now. Update in place as s
 - Automated secrets-scanning guardrail is live (ERP-010): Gitleaks via `pre-commit`, local hook + CI backstop, verified to actually block a real secret.
 - Ruff (lint) and Mypy (`--strict`, scoped to `app/`) are configured (ERP-007): Ruff runs via `pre-commit` and CI, Mypy via CI only. `app/` and `tests/` are fully compliant. `docs/engineering-guidelines.md` marks the now-enforced items accordingly.
 - Pytest coverage gate is enforced (ERP-006): `pytest-cov`, `--cov-fail-under=90` in CI. A logging convention (stdlib `logging`, module-level loggers, `logger.exception` on non-re-raising excepts) is defined in `docs/engineering-guidelines.md` and applied to `app/ingestion/jobs.py`'s previously-silent failure path.
-- **First vertical slice of application code exists and is live on `main`**: `app/ingestion/` — a PDF ingestion pipeline (`POST /ingestion/pdf` job-based upload, `GET /ingestion/jobs/{job_id}` polling). PyMuPDF4LLM fast-path parsing with automatic Docling fallback (tables/OCR). Structure-aware Markdown chunking with full provenance metadata (page range, section path, parser used). Scoped to parse + chunk only — no embedding, no persistence yet. Full test suite under `tests/ingestion/` (33 tests, ~98.6% coverage), all passing in CI.
-- PR #1 (`develop` → `main`) merged 2026-08-01. PR #2 (`develop` → `main`, secrets-scanning guardrail + ruff/mypy tooling) merged 2026-08-02.
+- **First vertical slice of application code exists and is live on `main`**: `app/ingestion/` — a PDF ingestion pipeline (`POST /ingestion/pdf` job-based upload, `GET /ingestion/jobs/{job_id}` polling). PyMuPDF4LLM fast-path parsing with automatic Docling fallback (tables/OCR). Structure-aware Markdown chunking with full provenance metadata (page range, section path, parser used). Full test suite under `tests/ingestion/` (33 tests, ~98.6% coverage), all passing in CI.
+- **Embedding generation and durable persistence are now wired into the ingestion job pipeline (ERP-011, on branch `erp-011-embedding-persistence`)**: Postgres persistence via SQLAlchemy 2.0 + Alembic (`app/core/db.py`, `app/ingestion/models.py`, `app/ingestion/repository.py` — document + chunks saved in one transaction), a FAISS index persisted to local disk (`app/embedding/`), and an Ollama-backed embedding client (Nomic Embed). `run_ingestion_job` calls the new `embed_and_persist` orchestration after chunking, inside the same try/except as the existing parse/chunk stage, so a `DONE` job now means chunks are embedded and durably persisted, not just held in memory. `docker-compose.yml` provides a local Postgres service; CI runs the full suite against a real Postgres service container. Not yet merged to `develop`/`main`.
+- PR #1 (`develop` → `main`) merged 2026-08-01. PR #2 (`develop` → `main`, secrets-scanning guardrail + ruff/mypy tooling) merged 2026-08-02. ERP-006 (pytest coverage gate + logging convention, see item above) merged `develop` → `main` 2026-08-02; `develop` and `main` were in sync with a clean working tree as of that merge (ERP-011 has since been developed on its own branch, not yet merged).
 
 ## What Does Not Exist Yet
 
-- No embedding generation, no Postgres/FAISS/BM25 persistence — the ingestion slice stops at chunking, by design (next vertical slice).
-- No retrieval or generation code at all yet.
-- Branch protection on `main` does not yet require CI status checks to pass (no `required_status_checks` configured) — CI now enforces ruff, mypy, pytest+coverage, and gitleaks, so this could be made required; not yet done.
+- Redis embedding cache — named in ADR-003 alongside Postgres/FAISS, but explicitly deferred out of ERP-011's scope to a follow-up ticket. It's cache-aside and non-load-bearing, so its absence affects latency, not correctness.
+- No retrieval or generation code at all yet — nothing reads persisted chunks/vectors back out (no similarity search, no query endpoint).
+- Branch protection on `main` does not yet require CI status checks to pass (no `required_status_checks` configured) — CI now enforces ruff, mypy, pytest+coverage, gitleaks, and (as of ERP-011) a real Postgres service container, so this could be made required; not yet done.
 
 ## Next Planned Work
 
-- Merge this session's ERP-006 work (`develop` → `main`, same PR pattern as before).
-- Embedding generation + Postgres/FAISS/BM25 persistence (the next vertical slice).
-- Consider requiring CI status checks in `main`'s branch protection, now that CI gives real signal (ruff, mypy, pytest+coverage, gitleaks).
+- Redis embedding cache (deferred from ERP-011) — cache-aside lookups ahead of Ollama calls.
+- Retrieval/query endpoint — the next vertical slice: similarity search against the FAISS index plus chunk text from Postgres.
+- Consider requiring CI status checks in `main`'s branch protection, now that CI gives real signal (ruff, mypy, pytest+coverage, gitleaks, Postgres-backed tests).

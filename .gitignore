@@ -20,6 +20,8 @@ env/
 *.crt
 credentials.json
 
+.worktrees/
+
 # Editors/OS
 .vscode/
 .idea/
@@ -30,3 +32,4 @@ Thumbs.db
 *.log
 .coverage
 htmlcov/
+data/
