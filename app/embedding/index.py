@@ -40,3 +40,20 @@ class FaissIndex:
         if directory:
             os.makedirs(directory, exist_ok=True)
         faiss.write_index(self._index, self._path)
+
+    def search(self, vector: list[float], k: int) -> list[tuple[int, float]]:
+        """Return up to `k` nearest `(vector_id, distance)` pairs, nearest-first.
+
+        Empty list if the index has no vectors or `k <= 0`. Padding entries FAISS
+        returns when the index has fewer than `k` vectors (`vector_id == -1`) are
+        dropped.
+        """
+        if self._index.ntotal == 0 or k <= 0:
+            return []
+        query = np.array([vector], dtype="float32")
+        distances, ids = self._index.search(query, k)
+        return [
+            (int(vector_id), float(distance))
+            for vector_id, distance in zip(ids[0], distances[0], strict=True)
+            if vector_id != -1
+        ]
