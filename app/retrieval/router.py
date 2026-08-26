@@ -16,7 +16,12 @@ router = APIRouter(prefix="/retrieval", tags=["retrieval"])
 def query(query_request: RetrievalQuery) -> RetrievalResponse:
     """Run a semantic search query and return ranked matching chunks."""
     try:
-        results = search(query_request.query, query_request.top_k, rerank=query_request.rerank)
+        results = search(
+            query_request.query,
+            query_request.top_k,
+            rerank=query_request.rerank,
+            expand_sections=query_request.expand_sections,
+        )
     except Exception as exc:
         logger.exception("Embedding backend unavailable while handling retrieval query")
         raise HTTPException(status_code=503, detail="Embedding backend unavailable") from exc

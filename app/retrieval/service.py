@@ -7,11 +7,13 @@ over score-normalization-based fusion.
 
 import logging
 
+from sqlalchemy.orm import Session
+
 from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
-from app.ingestion.repository import get_chunks_by_vector_ids, search_chunks_by_text
+from app.ingestion.repository import get_chunks_by_vector_ids, get_sibling_chunks, search_chunks_by_text
 from app.retrieval.config import get_reranker_settings
 from app.retrieval.reranker import FlashRankReranker, Reranker
 from app.retrieval.schemas import RetrievedChunk
@@ -38,6 +40,40 @@ def _reciprocal_rank_fusion(*ranked_id_lists: list[int], k: int = RRF_K) -> list
     return sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
 
 
+def _expand_sections(session: Session, results: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Insert each result's section-siblings immediately after it, deduped, best-first.
+
+    Every not-yet-seen chunk in `results` is followed by any other chunk in its document
+    sharing its exact `section_path` (excluding chunks already seen), inheriting that anchor's
+    `score`. Preserves `results`' relative order; may return more items than went in. See
+    `.ai/adr/ADR-007.md` for why this section-sibling approach was chosen.
+    """
+    expanded: list[RetrievedChunk] = []
+    seen_chunk_ids: set[str] = set()
+    for anchor in results:
+        if anchor.chunk_id in seen_chunk_ids:
+            continue
+        expanded.append(anchor)
+        seen_chunk_ids.add(anchor.chunk_id)
+
+        siblings = get_sibling_chunks(session, anchor.document_id, anchor.section_path, seen_chunk_ids)
+        for sibling in siblings:
+            expanded.append(
+                RetrievedChunk(
+                    chunk_id=sibling.chunk_id,
+                    document_id=sibling.document_id,
+                    text=sibling.text,
+                    section_path=sibling.section_path,
+                    page_start=sibling.page_start,
+                    page_end=sibling.page_end,
+                    source_filename=sibling.source_filename,
+                    score=anchor.score,
+                )
+            )
+            seen_chunk_ids.add(sibling.chunk_id)
+    return expanded
+
+
 def search(
     query: str,
     top_k: int,
@@ -46,6 +82,7 @@ def search(
     faiss_index: FaissIndex | None = None,
     rerank: bool = False,
     reranker: Reranker | None = None,
+    expand_sections: bool = False,
 ) -> list[RetrievedChunk]:
     """Run hybrid (vector + BM25) search and return up to `top_k` chunks, fused-score order.
 
@@ -57,6 +94,10 @@ def search(
     (a `FlashRankReranker` built from the process-wide `RerankerSettings` if none is injected)
     before being returned. If `rerank` is false (the default), `reranker` is never constructed
     or invoked, so opting out costs nothing.
+
+    If `expand_sections` is true, the (possibly reranked) results are expanded with each
+    result's section-siblings (see `_expand_sections`) -- the returned list may then be longer
+    than `top_k`; this is intended, not a bug.
     """
     settings = settings or get_embedding_settings()
     embedding_client = embedding_client or OllamaEmbeddingClient(settings)
@@ -99,5 +140,9 @@ def search(
 
         if rerank:
             reranker = reranker or FlashRankReranker(get_reranker_settings())
-            return reranker.rerank(query, results)
+            results = reranker.rerank(query, results)
+
+        if expand_sections:
+            results = _expand_sections(session, results)
+
         return results

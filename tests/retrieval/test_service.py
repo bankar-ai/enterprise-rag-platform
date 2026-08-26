@@ -5,7 +5,8 @@ from app.embedding.config import EmbeddingSettings
 from app.embedding.index import FaissIndex
 from app.ingestion.repository import save_document_and_chunks
 from app.ingestion.schemas import Chunk
-from app.retrieval.service import _reciprocal_rank_fusion, search
+from app.retrieval.schemas import RetrievedChunk
+from app.retrieval.service import _expand_sections, _reciprocal_rank_fusion, search
 
 
 class _FakeEmbeddingClient:
@@ -27,13 +28,15 @@ class _FakeReranker:
         return list(reversed(candidates))
 
 
-def _chunk(document_id: str, index: int, text: str | None = None) -> Chunk:
+def _chunk(
+    document_id: str, index: int, text: str | None = None, section_path: list[str] | None = None
+) -> Chunk:
     return Chunk(
         chunk_id=f"{document_id}-{index}",
         document_id=document_id,
         chunk_index=index,
         text=text if text is not None else f"chunk text {index}",
-        section_path=["Intro"],
+        section_path=section_path if section_path is not None else ["Intro"],
         page_start=1,
         page_end=1,
         char_count=13,
@@ -243,6 +246,137 @@ def test_search_fuses_overlapping_vector_and_bm25_hits(tmp_path):
     assert f"{document_id}-0" in result_chunk_ids
     assert f"{document_id}-1" in result_chunk_ids
     assert result_chunk_ids.index(f"{document_id}-0") < result_chunk_ids.index(f"{document_id}-1")
+
+
+def test_expand_sections_inserts_unseen_sibling_after_anchor_with_anchors_score():
+    document_id = "doc-expand-test"
+    chunks = [
+        _chunk(document_id, 0, section_path=["Chapter 1", "Background"]),
+        _chunk(document_id, 1, section_path=["Chapter 1", "Background"]),
+        _chunk(document_id, 2, section_path=["Chapter 1", "Methods"]),
+    ]
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        session.commit()
+
+    anchor = RetrievedChunk(
+        chunk_id=f"{document_id}-0",
+        document_id=document_id,
+        text="chunk text 0",
+        section_path=["Chapter 1", "Background"],
+        page_start=1,
+        page_end=1,
+        source_filename="doc.pdf",
+        score=0.42,
+    )
+
+    with session_factory() as session:
+        expanded = _expand_sections(session, [anchor])
+
+    assert [chunk.chunk_id for chunk in expanded] == [f"{document_id}-0", f"{document_id}-1"]
+    assert expanded[1].score == 0.42
+
+
+def test_expand_sections_does_not_duplicate_an_already_present_chunk():
+    document_id = "doc-expand-dedup-test"
+    chunks = [
+        _chunk(document_id, 0, section_path=["Intro"]),
+        _chunk(document_id, 1, section_path=["Intro"]),
+    ]
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        session.commit()
+
+    anchors = [
+        RetrievedChunk(
+            chunk_id=f"{document_id}-{index}",
+            document_id=document_id,
+            text=f"chunk text {index}",
+            section_path=["Intro"],
+            page_start=1,
+            page_end=1,
+            source_filename="doc.pdf",
+            score=1.0 - index * 0.1,
+        )
+        for index in (0, 1)
+    ]
+
+    with session_factory() as session:
+        expanded = _expand_sections(session, anchors)
+
+    assert [chunk.chunk_id for chunk in expanded] == [f"{document_id}-0", f"{document_id}-1"]
+
+
+def test_search_with_expand_sections_true_appends_section_siblings(tmp_path):
+    document_id = "doc-search-expand-test"
+    chunks = [
+        _chunk(document_id, 0, section_path=["Chapter 1", "Background"]),
+        _chunk(document_id, 1, section_path=["Chapter 1", "Background"]),
+    ]
+    vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    results = search(
+        query="find chunk 0",
+        top_k=1,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+        expand_sections=True,
+    )
+
+    # top_k=1 means only chunk 0 is a direct hit, but expand_sections pulls in its sibling.
+    assert [chunk.chunk_id for chunk in results] == [f"{document_id}-0", f"{document_id}-1"]
+
+
+def test_search_with_expand_sections_false_matches_baseline(tmp_path):
+    document_id = "doc-search-noexpand-test"
+    chunks = [_chunk(document_id, 0, section_path=["Chapter 1", "Background"])]
+    vectors = [[1.0, 0.0, 0.0, 0.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    results = search(
+        query="find chunk 0",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+    )
+
+    assert [chunk.chunk_id for chunk in results] == [f"{document_id}-0"]
+
+
+def test_search_composes_rerank_and_expand_sections(tmp_path):
+    document_id = "doc-search-rerank-expand-test"
+    chunks = [
+        _chunk(document_id, 0, section_path=["Chapter 1", "Background"]),
+        _chunk(document_id, 1, section_path=["Chapter 1", "Background"]),
+    ]
+    vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    fake_reranker = _FakeReranker()
+    results = search(
+        query="find chunk 0",
+        top_k=1,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+        rerank=True,
+        reranker=fake_reranker,
+        expand_sections=True,
+    )
+
+    assert len(fake_reranker.calls) == 1
+    assert [chunk.chunk_id for chunk in results] == [f"{document_id}-0", f"{document_id}-1"]
 
 
 def test_reciprocal_rank_fusion_sums_reciprocal_ranks_across_lists():
