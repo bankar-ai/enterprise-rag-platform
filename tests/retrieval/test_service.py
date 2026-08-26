@@ -5,7 +5,7 @@ from app.embedding.config import EmbeddingSettings
 from app.embedding.index import FaissIndex
 from app.ingestion.repository import save_document_and_chunks
 from app.ingestion.schemas import Chunk
-from app.retrieval.service import search
+from app.retrieval.service import _reciprocal_rank_fusion, search
 
 
 class _FakeEmbeddingClient:
@@ -18,12 +18,12 @@ class _FakeEmbeddingClient:
         return [self._vector for _ in texts]
 
 
-def _chunk(document_id: str, index: int) -> Chunk:
+def _chunk(document_id: str, index: int, text: str | None = None) -> Chunk:
     return Chunk(
         chunk_id=f"{document_id}-{index}",
         document_id=document_id,
         chunk_index=index,
-        text=f"chunk text {index}",
+        text=text if text is not None else f"chunk text {index}",
         section_path=["Intro"],
         page_start=1,
         page_end=1,
@@ -127,6 +127,79 @@ def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, ca
     assert results[0].chunk_id == f"{document_id}-0"
     assert vector_ids[0] != orphan_vector_id
     assert any(str(orphan_vector_id) in record.message for record in caplog.records)
+
+
+def test_search_fuses_bm25_hits_when_vector_search_finds_nothing(tmp_path):
+    document_id = "doc-bm25-test"
+    # Distinctive terms (not reused elsewhere in the suite) so full-text matches from other
+    # tests' persisted chunks in the shared test database can't bleed into this assertion.
+    chunks = [_chunk(document_id, 0, text="quokkas snorkel past zorbonium reefs at duskfall")]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    # No vectors added to FAISS at all -> vector retriever returns nothing.
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        session.commit()
+        vector_ids = [record.vector_id for record in records]
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    results = search(
+        query="quokkas zorbonium",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+    )
+
+    assert len(results) == 1
+    assert results[0].chunk_id == f"{document_id}-0"
+    assert vector_ids[0]
+
+
+def test_search_fuses_overlapping_vector_and_bm25_hits(tmp_path):
+    document_id = "doc-hybrid-test"
+    chunks = [
+        _chunk(document_id, 0, text="wombats burrow beneath flarnwood thickets"),
+        _chunk(document_id, 1, text="the stock market closed lower on Tuesday"),
+    ]
+    vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    results = search(
+        query="wombats flarnwood",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+    )
+
+    # Note: BM25 searches the whole `chunks` table (no per-document filtering, per ERP-012/014
+    # scope), so other tests' persisted chunks may also lexically match and appear in results;
+    # this test only asserts on this document's own two chunks and their relative order.
+    assert results[0].chunk_id == f"{document_id}-0"
+    result_chunk_ids = [result.chunk_id for result in results]
+    assert f"{document_id}-0" in result_chunk_ids
+    assert f"{document_id}-1" in result_chunk_ids
+    assert result_chunk_ids.index(f"{document_id}-0") < result_chunk_ids.index(f"{document_id}-1")
+
+
+def test_reciprocal_rank_fusion_sums_reciprocal_ranks_across_lists():
+    fused = dict(_reciprocal_rank_fusion([1, 2, 3], [2, 1], k=60))
+    assert fused[1] == pytest.approx(1 / 61 + 1 / 62)
+    assert fused[2] == pytest.approx(1 / 62 + 1 / 61)
+    assert fused[3] == pytest.approx(1 / 63)
+
+
+def test_reciprocal_rank_fusion_handles_one_empty_list():
+    fused = _reciprocal_rank_fusion([5, 6], [], k=60)
+    assert [vector_id for vector_id, _ in fused] == [5, 6]
+
+
+def test_reciprocal_rank_fusion_both_empty_returns_empty_list():
+    assert _reciprocal_rank_fusion([], [], k=60) == []
 
 
 def test_search_raises_when_embedding_client_returns_no_vectors(tmp_path):

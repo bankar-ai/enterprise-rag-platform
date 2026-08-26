@@ -23,6 +23,7 @@ def test_chunk_record_columns_present():
         "parser_used",
         "source_filename",
         "vector_id",
+        "search_vector",
     }
 
 
