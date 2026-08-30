@@ -9,6 +9,7 @@ dependencies = [
     "docling>=2.117.0",
     "faiss-cpu>=1.15.0",
     "fastapi>=0.141.1",
+    "flashrank>=0.2.10",
     "langchain-text-splitters>=1.1.2",
     "ollama>=0.6.2",
     "psycopg[binary]>=3.3.4",
@@ -65,4 +66,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "ollama"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "flashrank"
 ignore_missing_imports = true

@@ -85,3 +85,11 @@ def test_query_returns_ingested_chunk(simple_text_pdf):
     assert results
     assert results[0]["document_id"] == status_body["result"]["document_id"]
     assert 0 < results[0]["score"] <= 1.0
+
+    reranked_response = client.post(
+        "/retrieval/query", json={"query": "introduction", "top_k": 3, "rerank": True}
+    )
+    assert reranked_response.status_code == 200
+    reranked_results = reranked_response.json()["results"]
+    assert reranked_results
+    assert reranked_results[0]["document_id"] == status_body["result"]["document_id"]

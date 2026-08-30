@@ -12,6 +12,8 @@ from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
 from app.ingestion.repository import get_chunks_by_vector_ids, search_chunks_by_text
+from app.retrieval.config import get_reranker_settings
+from app.retrieval.reranker import FlashRankReranker, Reranker
 from app.retrieval.schemas import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -55,12 +57,19 @@ def search(
     settings: EmbeddingSettings | None = None,
     embedding_client: EmbeddingClient | None = None,
     faiss_index: FaissIndex | None = None,
+    rerank: bool = False,
+    reranker: Reranker | None = None,
 ) -> list[RetrievedChunk]:
     """Run hybrid (vector + BM25) search and return up to `top_k` chunks, fused-score order.
 
     `embedding_client`/`faiss_index`/`settings` are injectable for testing; default to
     Ollama/local-disk implementations built from `settings` (or the process-wide cached
     `EmbeddingSettings` if `settings` is not given).
+
+    If `rerank` is true, the fused+hydrated results are re-scored and reordered by `reranker`
+    (a `FlashRankReranker` built from the process-wide `RerankerSettings` if none is injected)
+    before being returned. If `rerank` is false (the default), `reranker` is never constructed
+    or invoked, so opting out costs nothing.
     """
     settings = settings or get_embedding_settings()
     embedding_client = embedding_client or OllamaEmbeddingClient(settings)
@@ -102,4 +111,8 @@ def search(
                     score=score,
                 )
             )
+
+        if rerank:
+            reranker = reranker or FlashRankReranker(get_reranker_settings())
+            return reranker.rerank(query, results)
         return results

@@ -19,6 +19,15 @@ class _FakeEmbeddingClient:
         return [self._vector for _ in texts]
 
 
+class _FakeReranker:
+    def __init__(self):
+        self.calls = []
+
+    def rerank(self, query, candidates):
+        self.calls.append((query, candidates))
+        return list(reversed(candidates))
+
+
 def _chunk(document_id: str, index: int, text: str | None = None) -> Chunk:
     return Chunk(
         chunk_id=f"{document_id}-{index}",
@@ -43,6 +52,56 @@ def _persist_and_index(document_id, chunks, vectors, faiss_index):
     faiss_index.add(vector_ids, vectors)
     faiss_index.save()
     return vector_ids
+
+
+def test_search_does_not_invoke_reranker_when_rerank_is_false(tmp_path):
+    document_id = "doc-norerank-test"
+    chunks = [_chunk(document_id, 0)]
+    vectors = [[1.0, 0.0, 0.0, 0.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    fake_reranker = _FakeReranker()
+    search(
+        query="find it",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+        rerank=False,
+        reranker=fake_reranker,
+    )
+
+    assert fake_reranker.calls == []
+
+
+def test_search_invokes_injected_reranker_and_uses_its_order_when_rerank_is_true(tmp_path):
+    document_id = "doc-rerank-test"
+    chunks = [_chunk(document_id, 0), _chunk(document_id, 1)]
+    vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    fake_reranker = _FakeReranker()
+    results = search(
+        query="find chunk 0",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+        rerank=True,
+        reranker=fake_reranker,
+    )
+
+    assert len(fake_reranker.calls) == 1
+    called_query, called_candidates = fake_reranker.calls[0]
+    assert called_query == "find chunk 0"
+    # _FakeReranker reverses order; service.search's own fused order had chunk 0 first
+    # (asserted by the equivalent non-reranked test), so a reversed result confirms the
+    # reranker's output -- not the fused order -- is what's returned.
+    assert [chunk.chunk_id for chunk in called_candidates] == list(reversed([c.chunk_id for c in results]))
 
 
 def test_search_returns_ranked_chunks(tmp_path):
