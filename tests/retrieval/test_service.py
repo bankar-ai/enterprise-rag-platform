@@ -5,7 +5,8 @@ from app.embedding.config import EmbeddingSettings
 from app.embedding.index import FaissIndex
 from app.ingestion.repository import save_document_and_chunks
 from app.ingestion.schemas import Chunk
-from app.retrieval.service import _reciprocal_rank_fusion, search
+from app.retrieval import service as service_module
+from app.retrieval.service import RRF_OVERSAMPLE_MULTIPLIER, _reciprocal_rank_fusion, search
 
 
 class _FakeEmbeddingClient:
@@ -154,7 +155,50 @@ def test_search_fuses_bm25_hits_when_vector_search_finds_nothing(tmp_path):
 
     assert len(results) == 1
     assert results[0].chunk_id == f"{document_id}-0"
-    assert vector_ids[0]
+    assert vector_ids
+
+
+def test_search_requests_oversampled_candidates_from_each_retriever_before_fusion(
+    tmp_path, monkeypatch
+):
+    document_id = "doc-oversample-test"
+    chunks = [_chunk(document_id, 0)]
+    vectors = [[1.0, 0.0, 0.0, 0.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    recorded_faiss_k = []
+    original_faiss_search = faiss_index.search
+
+    def _spy_faiss_search(vector, k):
+        recorded_faiss_k.append(k)
+        return original_faiss_search(vector, k)
+
+    monkeypatch.setattr(faiss_index, "search", _spy_faiss_search)
+
+    recorded_bm25_k = []
+    original_bm25_search = service_module.search_chunks_by_text
+
+    def _spy_bm25_search(session, query, k):
+        recorded_bm25_k.append(k)
+        return original_bm25_search(session, query, k)
+
+    monkeypatch.setattr(service_module, "search_chunks_by_text", _spy_bm25_search)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    search(
+        query="chunk text 0",
+        top_k=3,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+    )
+
+    # Each retriever must be asked for more than `top_k` candidates -- fusing two already
+    # top_k-truncated lists would only ever see their union (at most 2 * top_k items),
+    # defeating the point of combining two ranking signals. See RRF_OVERSAMPLE_MULTIPLIER.
+    assert recorded_faiss_k == [3 * RRF_OVERSAMPLE_MULTIPLIER]
+    assert recorded_bm25_k == [3 * RRF_OVERSAMPLE_MULTIPLIER]
 
 
 def test_search_fuses_overlapping_vector_and_bm25_hits(tmp_path):
@@ -188,14 +232,20 @@ def test_search_fuses_overlapping_vector_and_bm25_hits(tmp_path):
 
 def test_reciprocal_rank_fusion_sums_reciprocal_ranks_across_lists():
     fused = dict(_reciprocal_rank_fusion([1, 2, 3], [2, 1], k=60))
-    assert fused[1] == pytest.approx(1 / 61 + 1 / 62)
-    assert fused[2] == pytest.approx(1 / 62 + 1 / 61)
-    assert fused[3] == pytest.approx(1 / 63)
+    max_possible = 2 * (1 / 61)  # two non-empty lists -> best case is rank 1 in both
+    assert fused[1] == pytest.approx((1 / 61 + 1 / 62) / max_possible)
+    assert fused[2] == pytest.approx((1 / 62 + 1 / 61) / max_possible)
+    assert fused[3] == pytest.approx((1 / 63) / max_possible)
+    assert all(0 < score <= 1.0 for score in fused.values())
 
 
 def test_reciprocal_rank_fusion_handles_one_empty_list():
-    fused = _reciprocal_rank_fusion([5, 6], [], k=60)
-    assert [vector_id for vector_id, _ in fused] == [5, 6]
+    fused = dict(_reciprocal_rank_fusion([5, 6], [], k=60))
+    max_possible = 1 / 61  # only one non-empty list -> best case is rank 1 in that list
+    assert [vector_id for vector_id in fused] == [5, 6]
+    assert fused[5] == pytest.approx((1 / 61) / max_possible)
+    assert fused[5] == 1.0
+    assert fused[6] == pytest.approx((1 / 62) / max_possible)
 
 
 def test_reciprocal_rank_fusion_both_empty_returns_empty_list():
