@@ -38,7 +38,10 @@ class RedisEmbeddingCache:
 
     @staticmethod
     def _key(model: str, text: str) -> str:
-        digest = hashlib.sha256(f"{model}:{text}".encode()).hexdigest()
+        model_bytes = model.encode()
+        digest = hashlib.sha256(
+            len(model_bytes).to_bytes(4, "big") + model_bytes + text.encode()
+        ).hexdigest()
         return f"embedding:{digest}"
 
     def get(self, model: str, text: str) -> list[float] | None:
