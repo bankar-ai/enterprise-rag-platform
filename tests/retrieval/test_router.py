@@ -56,7 +56,7 @@ def test_query_returns_503_when_embedding_backend_unavailable(monkeypatch):
     response = client.post("/retrieval/query", json={"query": "anything"})
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Embedding backend unavailable"}
+    assert response.json() == {"detail": "Retrieval query failed"}
 
 
 def test_query_returns_ingested_chunk(simple_text_pdf):
