@@ -24,20 +24,33 @@ logger = logging.getLogger(__name__)
 # implementations default to. Dampens the influence of low ranks without per-corpus tuning.
 RRF_K = 60
 
+# Each retriever is asked for RRF_OVERSAMPLE_MULTIPLIER * top_k candidates before fusion, so a
+# chunk that ranks just outside top_k on one retriever but strongly on the other still has a
+# chance to fuse into the final top_k. Without oversampling, fusion only ever sees the union of
+# two already-truncated top_k lists, defeating the point of combining two signals.
+RRF_OVERSAMPLE_MULTIPLIER = 4
+
 
 def _reciprocal_rank_fusion(*ranked_id_lists: list[int], k: int = RRF_K) -> list[tuple[int, float]]:
-    """Fuse multiple rank-ordered ID lists into one, scored by summed reciprocal rank.
+    """Fuse multiple rank-ordered ID lists into one, scored by normalized reciprocal rank.
 
-    Each `ranked_id_lists` entry is a best-first list of IDs from one retriever. An ID's
+    Each `ranked_id_lists` entry is a best-first list of IDs from one retriever. An ID's raw
     contribution from a given list is `1 / (k + rank)` (1-indexed); IDs absent from a list
-    contribute nothing for that list. Returns `(id, fused_score)` pairs sorted by score
-    descending. `[]` if every input list is empty.
+    contribute nothing for that list. Raw sums are then divided by the maximum score achievable
+    (an ID ranked first in every non-empty list), so the fused score is bounded to `(0, 1]` and
+    comparable across queries -- `1.0` means "best possible rank in every retriever that found
+    it". This is a fusion-confidence score, not a similarity/distance metric. Returns `(id,
+    normalized_score)` pairs sorted by score descending. `[]` if every input list is empty.
     """
     scores: dict[int, float] = {}
     for ranked_ids in ranked_id_lists:
         for rank, item_id in enumerate(ranked_ids, start=1):
             scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
-    return sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+    if not scores:
+        return []
+    max_possible_score = sum(1.0 / (k + 1) for ranked_ids in ranked_id_lists if ranked_ids)
+    normalized = [(item_id, score / max_possible_score) for item_id, score in scores.items()]
+    return sorted(normalized, key=lambda pair: pair[1], reverse=True)
 
 
 def _expand_sections(session: Session, results: list[RetrievedChunk]) -> list[RetrievedChunk]:
@@ -103,15 +116,17 @@ def search(
     embedding_client = embedding_client or OllamaEmbeddingClient(settings)
     faiss_index = faiss_index or FaissIndex(settings.faiss_index_path, settings.dimension)
 
+    candidate_k = top_k * RRF_OVERSAMPLE_MULTIPLIER
+
     vectors = embedding_client.embed([query])
     if not vectors:
         raise ValueError("embedding client returned no vectors for the query")
-    vector_hits = faiss_index.search(vectors[0], top_k)
+    vector_hits = faiss_index.search(vectors[0], candidate_k)
     vector_ranked_ids = [vector_id for vector_id, _ in vector_hits]
 
     session_factory = get_session_factory()
     with session_factory() as session:
-        bm25_hits = search_chunks_by_text(session, query, top_k)
+        bm25_hits = search_chunks_by_text(session, query, candidate_k)
         bm25_ranked_ids = [vector_id for vector_id, _ in bm25_hits]
 
         fused = _reciprocal_rank_fusion(vector_ranked_ids, bm25_ranked_ids)[:top_k]

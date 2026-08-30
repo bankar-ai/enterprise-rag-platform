@@ -15,3 +15,17 @@ def test_reads_env_vars(monkeypatch):
     settings = EmbeddingSettings()
     assert settings.model == "custom-model"
     assert settings.dimension == 4
+
+
+def test_redis_defaults():
+    settings = EmbeddingSettings()
+    assert settings.redis_url.startswith("redis://")
+    assert settings.cache_ttl_seconds > 0
+
+
+def test_redis_reads_env_vars(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_REDIS_URL", "redis://cache-host:6379/2")
+    monkeypatch.setenv("EMBEDDING_CACHE_TTL_SECONDS", "60")
+    settings = EmbeddingSettings()
+    assert settings.redis_url == "redis://cache-host:6379/2"
+    assert settings.cache_ttl_seconds == 60

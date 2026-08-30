@@ -23,6 +23,6 @@ def query(query_request: RetrievalQuery) -> RetrievalResponse:
             expand_sections=query_request.expand_sections,
         )
     except Exception as exc:
-        logger.exception("Embedding backend unavailable while handling retrieval query")
-        raise HTTPException(status_code=503, detail="Embedding backend unavailable") from exc
+        logger.exception("Retrieval query failed")
+        raise HTTPException(status_code=503, detail="Retrieval query failed") from exc
     return RetrievalResponse(results=results)
