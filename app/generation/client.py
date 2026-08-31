@@ -33,5 +33,6 @@ class OllamaLLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             options={"temperature": self._temperature},
+            think=False,
         )
-        return response["message"]["content"]
+        return response.message.content or ""

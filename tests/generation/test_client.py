@@ -1,3 +1,5 @@
+import ollama
+
 from app.generation.client import OllamaLLMClient
 from app.generation.config import GenerationSettings
 
@@ -7,9 +9,11 @@ class _FakeOllamaClient:
         self.host = host
         self.calls = []
 
-    def chat(self, model, messages, options):
-        self.calls.append((model, messages, options))
-        return {"message": {"content": "the answer [1]"}}
+    def chat(self, model, messages, options, think=None):
+        self.calls.append((model, messages, options, think))
+        return ollama.ChatResponse(
+            message=ollama.Message(role="assistant", content="the answer [1]")
+        )
 
 
 def test_generate_calls_ollama_with_system_and_user_messages(monkeypatch):
@@ -31,5 +35,6 @@ def test_generate_calls_ollama_with_system_and_user_messages(monkeypatch):
                 {"role": "user", "content": "user text"},
             ],
             {"temperature": 0.2},
+            False,
         )
     ]
