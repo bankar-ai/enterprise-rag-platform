@@ -2,7 +2,8 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, Identity, Text
+from sqlalchemy import JSON, Computed, ForeignKey, Identity, Text
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -41,3 +42,6 @@ class ChunkRecord(Base):
     parser_used: Mapped[str]
     source_filename: Mapped[str]
     vector_id: Mapped[int] = mapped_column(Identity(always=True), unique=True)
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english', text)", persisted=True)
+    )

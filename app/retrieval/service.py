@@ -1,15 +1,90 @@
-"""Semantic search over ingested chunks: embed a query, search FAISS, hydrate from Postgres."""
+"""Hybrid search over ingested chunks.
+
+Fuses FAISS vector search and Postgres BM25 full-text search via Reciprocal Rank Fusion (RRF),
+then hydrates the fused results from Postgres. See `.ai/adr/ADR-005.md` for why RRF was chosen
+over score-normalization-based fusion.
+"""
 
 import logging
+
+from sqlalchemy.orm import Session
 
 from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
-from app.ingestion.repository import get_chunks_by_vector_ids
+from app.ingestion.repository import get_chunks_by_vector_ids, get_sibling_chunks, search_chunks_by_text
+from app.retrieval.config import get_reranker_settings
+from app.retrieval.reranker import FlashRankReranker, Reranker
 from app.retrieval.schemas import RetrievedChunk
 
 logger = logging.getLogger(__name__)
+
+# The constant from the original RRF paper (Cormack et al.), and the value most hybrid-search
+# implementations default to. Dampens the influence of low ranks without per-corpus tuning.
+RRF_K = 60
+
+# Each retriever is asked for RRF_OVERSAMPLE_MULTIPLIER * top_k candidates before fusion, so a
+# chunk that ranks just outside top_k on one retriever but strongly on the other still has a
+# chance to fuse into the final top_k. Without oversampling, fusion only ever sees the union of
+# two already-truncated top_k lists, defeating the point of combining two signals.
+RRF_OVERSAMPLE_MULTIPLIER = 4
+
+
+def _reciprocal_rank_fusion(*ranked_id_lists: list[int], k: int = RRF_K) -> list[tuple[int, float]]:
+    """Fuse multiple rank-ordered ID lists into one, scored by normalized reciprocal rank.
+
+    Each `ranked_id_lists` entry is a best-first list of IDs from one retriever. An ID's raw
+    contribution from a given list is `1 / (k + rank)` (1-indexed); IDs absent from a list
+    contribute nothing for that list. Raw sums are then divided by the maximum score achievable
+    (an ID ranked first in every non-empty list), so the fused score is bounded to `(0, 1]` and
+    comparable across queries -- `1.0` means "best possible rank in every retriever that found
+    it". This is a fusion-confidence score, not a similarity/distance metric. Returns `(id,
+    normalized_score)` pairs sorted by score descending. `[]` if every input list is empty.
+    """
+    scores: dict[int, float] = {}
+    for ranked_ids in ranked_id_lists:
+        for rank, item_id in enumerate(ranked_ids, start=1):
+            scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
+    if not scores:
+        return []
+    max_possible_score = sum(1.0 / (k + 1) for ranked_ids in ranked_id_lists if ranked_ids)
+    normalized = [(item_id, score / max_possible_score) for item_id, score in scores.items()]
+    return sorted(normalized, key=lambda pair: pair[1], reverse=True)
+
+
+def _expand_sections(session: Session, results: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Insert each result's section-siblings immediately after it, deduped, best-first.
+
+    Every not-yet-seen chunk in `results` is followed by any other chunk in its document
+    sharing its exact `section_path` (excluding chunks already seen), inheriting that anchor's
+    `score`. Preserves `results`' relative order; may return more items than went in. See
+    `.ai/adr/ADR-007.md` for why this section-sibling approach was chosen.
+    """
+    expanded: list[RetrievedChunk] = []
+    seen_chunk_ids: set[str] = set()
+    for anchor in results:
+        if anchor.chunk_id in seen_chunk_ids:
+            continue
+        expanded.append(anchor)
+        seen_chunk_ids.add(anchor.chunk_id)
+
+        siblings = get_sibling_chunks(session, anchor.document_id, anchor.section_path, seen_chunk_ids)
+        for sibling in siblings:
+            expanded.append(
+                RetrievedChunk(
+                    chunk_id=sibling.chunk_id,
+                    document_id=sibling.document_id,
+                    text=sibling.text,
+                    section_path=sibling.section_path,
+                    page_start=sibling.page_start,
+                    page_end=sibling.page_end,
+                    source_filename=sibling.source_filename,
+                    score=anchor.score,
+                )
+            )
+            seen_chunk_ids.add(sibling.chunk_id)
+    return expanded
 
 
 def search(
@@ -18,32 +93,52 @@ def search(
     settings: EmbeddingSettings | None = None,
     embedding_client: EmbeddingClient | None = None,
     faiss_index: FaissIndex | None = None,
+    rerank: bool = False,
+    reranker: Reranker | None = None,
+    expand_sections: bool = False,
 ) -> list[RetrievedChunk]:
-    """Embed `query`, search the FAISS index, and return up to `top_k` chunks ranked by similarity.
+    """Run hybrid (vector + BM25) search and return up to `top_k` chunks, fused-score order.
 
     `embedding_client`/`faiss_index`/`settings` are injectable for testing; default to
     Ollama/local-disk implementations built from `settings` (or the process-wide cached
     `EmbeddingSettings` if `settings` is not given).
+
+    If `rerank` is true, the fused+hydrated results are re-scored and reordered by `reranker`
+    (a `FlashRankReranker` built from the process-wide `RerankerSettings` if none is injected)
+    before being returned. If `rerank` is false (the default), `reranker` is never constructed
+    or invoked, so opting out costs nothing.
+
+    If `expand_sections` is true, the (possibly reranked) results are expanded with each
+    result's section-siblings (see `_expand_sections`) -- the returned list may then be longer
+    than `top_k`; this is intended, not a bug.
     """
     settings = settings or get_embedding_settings()
     embedding_client = embedding_client or OllamaEmbeddingClient(settings)
     faiss_index = faiss_index or FaissIndex(settings.faiss_index_path, settings.dimension)
 
+    candidate_k = top_k * RRF_OVERSAMPLE_MULTIPLIER
+
     vectors = embedding_client.embed([query])
     if not vectors:
         raise ValueError("embedding client returned no vectors for the query")
-    hits = faiss_index.search(vectors[0], top_k)
-    if not hits:
-        return []
+    vector_hits = faiss_index.search(vectors[0], candidate_k)
+    vector_ranked_ids = [vector_id for vector_id, _ in vector_hits]
 
     session_factory = get_session_factory()
     with session_factory() as session:
-        chunks_by_vector_id = get_chunks_by_vector_ids(session, [vector_id for vector_id, _ in hits])
+        bm25_hits = search_chunks_by_text(session, query, candidate_k)
+        bm25_ranked_ids = [vector_id for vector_id, _ in bm25_hits]
+
+        fused = _reciprocal_rank_fusion(vector_ranked_ids, bm25_ranked_ids)[:top_k]
+        if not fused:
+            return []
+
+        chunks_by_vector_id = get_chunks_by_vector_ids(session, [vector_id for vector_id, _ in fused])
         results = []
-        for vector_id, distance in hits:
+        for vector_id, score in fused:
             chunk = chunks_by_vector_id.get(vector_id)
             if chunk is None:
-                logger.warning("Dropping FAISS hit with no matching chunk row: vector_id=%s", vector_id)
+                logger.warning("Dropping fused hit with no matching chunk row: vector_id=%s", vector_id)
                 continue
             results.append(
                 RetrievedChunk(
@@ -54,7 +149,15 @@ def search(
                     page_start=chunk.page_start,
                     page_end=chunk.page_end,
                     source_filename=chunk.source_filename,
-                    score=1.0 / (1.0 + distance),
+                    score=score,
                 )
             )
+
+        if rerank:
+            reranker = reranker or FlashRankReranker(get_reranker_settings())
+            results = reranker.rerank(query, results)
+
+        if expand_sections:
+            results = _expand_sections(session, results)
+
         return results

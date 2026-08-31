@@ -1,6 +1,8 @@
 """Persistence for ingested documents and their chunks."""
 
-from sqlalchemy import select
+from collections.abc import Set as AbstractSet
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ingestion.models import ChunkRecord, DocumentRecord
@@ -43,3 +45,46 @@ def get_chunks_by_vector_ids(session: Session, vector_ids: list[int]) -> dict[in
         return {}
     rows = session.scalars(select(ChunkRecord).where(ChunkRecord.vector_id.in_(vector_ids))).all()
     return {row.vector_id: row for row in rows}
+
+
+def search_chunks_by_text(session: Session, query_text: str, k: int) -> list[tuple[int, float]]:
+    """Full-text search chunk text via Postgres, returning `(vector_id, rank)` pairs, best-first.
+
+    `[]` for a blank query, `k <= 0`, or no matching chunks. Uses `plainto_tsquery` (safe against
+    arbitrary user input, no `tsquery` syntax to escape) against the generated `search_vector`
+    column, ranked by `ts_rank`.
+    """
+    if not query_text.strip() or k <= 0:
+        return []
+    tsquery = func.plainto_tsquery("english", query_text)
+    rank = func.ts_rank(ChunkRecord.search_vector, tsquery).label("rank")
+    rows = session.execute(
+        select(ChunkRecord.vector_id, rank)
+        .where(ChunkRecord.search_vector.op("@@")(tsquery))
+        .order_by(rank.desc())
+        .limit(k)
+    ).all()
+    return [(int(vector_id), float(rank_value)) for vector_id, rank_value in rows]
+
+
+def get_sibling_chunks(
+    session: Session,
+    document_id: str,
+    section_path: list[str],
+    exclude_chunk_ids: AbstractSet[str] = frozenset(),
+) -> list[ChunkRecord]:
+    """Return `document_id`'s chunks whose `section_path` exactly equals `section_path`.
+
+    Ordered by `chunk_index`; excludes any `chunk_id` in `exclude_chunk_ids`. Filters by
+    section in Python (not SQL) because `chunks.section_path` is a Postgres `json` column,
+    which has no `=` operator (see `.ai/adr/ADR-007.md`) -- comparison happens against the
+    already-indexed `document_id`'s (typically small) chunk set.
+    """
+    rows = session.scalars(
+        select(ChunkRecord).where(ChunkRecord.document_id == document_id).order_by(ChunkRecord.chunk_index)
+    ).all()
+    return [
+        row
+        for row in rows
+        if row.section_path == section_path and row.chunk_id not in exclude_chunk_ids
+    ]

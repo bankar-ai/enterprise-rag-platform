@@ -8,10 +8,12 @@ class RetrievalQuery(BaseModel):
 
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=50)
+    rerank: bool = Field(default=False)
+    expand_sections: bool = Field(default=False)
 
 
 class RetrievedChunk(BaseModel):
-    """A single retrieved chunk, with full provenance metadata and a similarity score."""
+    """A single retrieved chunk, with full provenance metadata and a fused relevance score."""
 
     chunk_id: str
     document_id: str
@@ -20,7 +22,12 @@ class RetrievedChunk(BaseModel):
     page_start: int
     page_end: int
     source_filename: str
-    score: float
+    score: float = Field(
+        description=(
+            "Normalized reciprocal-rank-fusion score in (0, 1], not a raw similarity/distance "
+            "metric. 1.0 means the chunk ranked first in every retriever that found it."
+        )
+    )
 
 
 class RetrievalResponse(BaseModel):

@@ -1,15 +1,22 @@
 from app.core.db import get_session_factory
-from app.ingestion.repository import get_chunks_by_vector_ids, save_document_and_chunks
+from app.ingestion.repository import (
+    get_chunks_by_vector_ids,
+    get_sibling_chunks,
+    save_document_and_chunks,
+    search_chunks_by_text,
+)
 from app.ingestion.schemas import Chunk
 
 
-def _chunk(document_id: str, index: int) -> Chunk:
+def _chunk(
+    document_id: str, index: int, text: str | None = None, section_path: list[str] | None = None
+) -> Chunk:
     return Chunk(
         chunk_id=f"{document_id}-{index}",
         document_id=document_id,
         chunk_index=index,
-        text=f"chunk text {index}",
-        section_path=["Intro"],
+        text=text if text is not None else f"chunk text {index}",
+        section_path=section_path if section_path is not None else ["Intro"],
         page_start=1,
         page_end=1,
         char_count=13,
@@ -62,3 +69,85 @@ def test_get_chunks_by_vector_ids_ignores_unknown_ids():
     session_factory = get_session_factory()
     with session_factory() as session:
         assert get_chunks_by_vector_ids(session, [999_999_999]) == {}
+
+
+def test_search_chunks_by_text_ranks_matching_chunk_first():
+    document_id = "doc-fts-test"
+    chunks = [
+        _chunk(document_id, 0, text="giraffes are tall herbivorous mammals from Africa"),
+        _chunk(document_id, 1, text="the stock market closed lower on Tuesday"),
+    ]
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        session.commit()
+        vector_ids = [record.vector_id for record in records]
+
+    with session_factory() as session:
+        results = search_chunks_by_text(session, "giraffes Africa", k=5)
+
+    assert results
+    assert results[0][0] == vector_ids[0]
+
+
+def test_search_chunks_by_text_no_match_returns_empty_list():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        assert search_chunks_by_text(session, "zzzznonexistentqueryterm", k=5) == []
+
+
+def test_search_chunks_by_text_empty_query_returns_empty_list():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        assert search_chunks_by_text(session, "", k=5) == []
+
+
+def test_get_sibling_chunks_returns_only_matching_section_ordered_by_chunk_index():
+    document_id = "doc-siblings-test"
+    chunks = [
+        _chunk(document_id, 0, section_path=["Chapter 1", "Background"]),
+        _chunk(document_id, 1, section_path=["Chapter 1", "Background"]),
+        _chunk(document_id, 2, section_path=["Chapter 1", "Methods"]),
+    ]
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        session.commit()
+
+    with session_factory() as session:
+        siblings = get_sibling_chunks(session, document_id, ["Chapter 1", "Background"])
+
+    assert [chunk.chunk_id for chunk in siblings] == [f"{document_id}-0", f"{document_id}-1"]
+
+
+def test_get_sibling_chunks_honors_exclude_chunk_ids():
+    document_id = "doc-siblings-exclude-test"
+    chunks = [
+        _chunk(document_id, 0, section_path=["Intro"]),
+        _chunk(document_id, 1, section_path=["Intro"]),
+    ]
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        session.commit()
+
+    with session_factory() as session:
+        siblings = get_sibling_chunks(
+            session, document_id, ["Intro"], exclude_chunk_ids={f"{document_id}-0"}
+        )
+
+    assert [chunk.chunk_id for chunk in siblings] == [f"{document_id}-1"]
+
+
+def test_get_sibling_chunks_no_matching_section_returns_empty_list():
+    document_id = "doc-siblings-empty-test"
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        save_document_and_chunks(session, document_id, "doc.pdf", [_chunk(document_id, 0)])
+        session.commit()
+
+    with session_factory() as session:
+        assert get_sibling_chunks(session, document_id, ["Nonexistent Section"]) == []
