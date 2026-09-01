@@ -44,11 +44,14 @@ def generate(
     stateless: no session opened, no history loaded, no rewriting, nothing persisted --
     behavior is identical to the single-turn-only version of this function. Given a
     `conversation_id`, the last `settings.history_window_turns` messages are loaded (empty
-    on a conversation's first turn); if any exist, `query` is rewritten into a standalone
-    retrieval query via `rewrite_query` before running retrieval, and that history is
-    rendered into the generation prompt. Both the raw user turn and the assistant's answer
-    are persisted in one transaction, but only after generation succeeds -- a failure
-    commits nothing.
+    on a conversation's first turn) via a short-lived read session that is closed before
+    rewriting/retrieval/generation run; no DB session is held open across those LLM calls.
+    If history exists, `query` is rewritten into a standalone retrieval query via
+    `rewrite_query` before running retrieval, and that history is rendered into the
+    generation prompt. Both the raw user turn and the assistant's answer are persisted
+    together in one transaction via a second, separately opened write session, but only
+    after generation succeeds -- a failure commits nothing (the write session isn't even
+    opened until `answer`/`citations` are fully computed).
 
     Runs the existing hybrid retrieval pipeline unmodified (`rerank`/`expand_sections`
     passed straight through). If retrieval returns no chunks, short-circuits to
@@ -74,31 +77,35 @@ def generate(
         )
 
     session_factory = get_session_factory()
-    with session_factory() as session:
-        history_records = get_recent_messages(session, conversation_id, settings.history_window_turns)
+
+    with session_factory() as read_session:
+        history_records = get_recent_messages(
+            read_session, conversation_id, settings.history_window_turns
+        )
         history = [ConversationTurn(role=r.role, content=r.content) for r in history_records]
 
-        if history:
-            llm_client = llm_client or OllamaLLMClient(settings)
-            rewritten_query = rewrite_query(query, history, llm_client)
-        else:
-            rewritten_query = query
+    if history:
+        llm_client = llm_client or OllamaLLMClient(settings)
+        rewritten_query = rewrite_query(query, history, llm_client)
+    else:
+        rewritten_query = query
 
-        chunks = retrieval_search(rewritten_query, top_k, rerank=rerank, expand_sections=expand_sections)
-        if not chunks:
-            answer = NO_CONTEXT_ANSWER
-            citations: list[Citation] = []
-        else:
-            llm_client = llm_client or OllamaLLMClient(settings)
-            user_prompt, included_chunks = build_prompt(
-                query, chunks, settings.max_context_chars, history=history
-            )
-            answer = llm_client.generate(SYSTEM_PROMPT, user_prompt)
-            citations = _citations_for(included_chunks)
+    chunks = retrieval_search(rewritten_query, top_k, rerank=rerank, expand_sections=expand_sections)
+    if not chunks:
+        answer = NO_CONTEXT_ANSWER
+        citations: list[Citation] = []
+    else:
+        llm_client = llm_client or OllamaLLMClient(settings)
+        user_prompt, included_chunks = build_prompt(
+            query, chunks, settings.max_context_chars, history=history
+        )
+        answer = llm_client.generate(SYSTEM_PROMPT, user_prompt)
+        citations = _citations_for(included_chunks)
 
-        get_or_create_conversation(session, conversation_id)
-        append_message(session, conversation_id, "user", query)
-        append_message(session, conversation_id, "assistant", answer)
-        session.commit()
+    with session_factory() as write_session:
+        get_or_create_conversation(write_session, conversation_id)
+        append_message(write_session, conversation_id, "user", query)
+        append_message(write_session, conversation_id, "assistant", answer)
+        write_session.commit()
 
     return GenerationResponse(answer=answer, citations=citations, conversation_id=conversation_id)
