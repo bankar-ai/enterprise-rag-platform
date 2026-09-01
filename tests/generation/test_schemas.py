@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from pydantic import ValidationError
 
@@ -33,3 +35,32 @@ def test_generation_response_round_trip():
     response = GenerationResponse(answer="the answer [1]", citations=[citation])
 
     assert response.model_dump()["citations"][0]["chunk_id"] == "c1"
+
+
+def test_generation_query_conversation_id_defaults_to_none():
+    query = GenerationQuery(query="hello")
+    assert query.conversation_id is None
+
+
+def test_generation_query_accepts_conversation_id():
+    conversation_id = uuid.uuid4()
+    query = GenerationQuery(query="hello", conversation_id=conversation_id)
+    assert query.conversation_id == conversation_id
+
+
+def test_generation_response_conversation_id_defaults_to_none():
+    response = GenerationResponse(answer="hi", citations=[])
+    assert response.conversation_id is None
+
+
+def test_generation_response_accepts_conversation_id():
+    conversation_id = uuid.uuid4()
+    response = GenerationResponse(answer="hi", citations=[], conversation_id=conversation_id)
+    assert response.conversation_id == conversation_id
+
+
+def test_conversation_turn_round_trip():
+    from app.generation.schemas import ConversationTurn
+
+    turn = ConversationTurn(role="user", content="hello")
+    assert turn.model_dump() == {"role": "user", "content": "hello"}
