@@ -47,3 +47,22 @@ def get_recent_messages(
         .limit(limit)
     ).all()
     return list(reversed(rows))
+
+
+def get_conversation(session: Session, conversation_id: uuid.UUID) -> ConversationRecord | None:
+    """Return the `ConversationRecord` for `conversation_id`, or `None` if it doesn't exist.
+
+    Unlike `get_or_create_conversation`, never creates a row -- a plain lookup for read paths.
+    """
+    return session.get(ConversationRecord, conversation_id)
+
+
+def get_all_messages(session: Session, conversation_id: uuid.UUID) -> list[ConversationMessageRecord]:
+    """Return every message for `conversation_id`, oldest first. `[]` if none exist."""
+    return list(
+        session.scalars(
+            select(ConversationMessageRecord)
+            .where(ConversationMessageRecord.conversation_id == conversation_id)
+            .order_by(ConversationMessageRecord.sequence.asc())
+        ).all()
+    )

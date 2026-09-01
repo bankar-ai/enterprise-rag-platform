@@ -1,7 +1,13 @@
 import uuid
 
 from app.core.db import get_session_factory
-from app.generation.repository import append_message, get_or_create_conversation, get_recent_messages
+from app.generation.repository import (
+    append_message,
+    get_all_messages,
+    get_conversation,
+    get_or_create_conversation,
+    get_recent_messages,
+)
 
 
 def test_get_or_create_conversation_creates_new_row():
@@ -77,3 +83,54 @@ def test_get_recent_messages_unknown_conversation_returns_empty_list():
     session_factory = get_session_factory()
     with session_factory() as session:
         assert get_recent_messages(session, uuid.uuid4(), limit=10) == []
+
+
+def test_get_conversation_returns_existing_row():
+    conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        get_or_create_conversation(session, conversation_id)
+        session.commit()
+
+    with session_factory() as session:
+        conversation = get_conversation(session, conversation_id)
+
+        assert conversation is not None
+        assert conversation.id == conversation_id
+
+
+def test_get_conversation_unknown_id_returns_none():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        assert get_conversation(session, uuid.uuid4()) is None
+
+
+def test_get_conversation_does_not_create_a_row():
+    conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        get_conversation(session, conversation_id)
+
+    with session_factory() as session:
+        assert get_conversation(session, conversation_id) is None
+
+
+def test_get_all_messages_returns_every_message_oldest_first_no_limit():
+    conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        get_or_create_conversation(session, conversation_id)
+        for i in range(12):
+            append_message(session, conversation_id, "user", f"message {i}")
+        session.commit()
+
+    with session_factory() as session:
+        messages = get_all_messages(session, conversation_id)
+
+        assert [m.content for m in messages] == [f"message {i}" for i in range(12)]
+
+
+def test_get_all_messages_unknown_conversation_returns_empty_list():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        assert get_all_messages(session, uuid.uuid4()) == []

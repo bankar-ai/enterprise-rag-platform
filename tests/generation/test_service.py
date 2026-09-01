@@ -2,8 +2,8 @@ import uuid
 
 from app.core.db import get_session_factory
 from app.generation.config import GenerationSettings
-from app.generation.repository import get_or_create_conversation, get_recent_messages
-from app.generation.service import NO_CONTEXT_ANSWER, generate
+from app.generation.repository import append_message, get_or_create_conversation, get_recent_messages
+from app.generation.service import NO_CONTEXT_ANSWER, generate, get_conversation_history
 from app.retrieval.schemas import RetrievedChunk
 
 
@@ -211,3 +211,24 @@ def test_generate_conversation_short_circuit_still_persists_turns(monkeypatch):
         messages = get_recent_messages(session, conversation_id, limit=10)
     assert [m.role for m in messages] == ["user", "assistant"]
     assert messages[1].content == NO_CONTEXT_ANSWER
+
+
+def test_get_conversation_history_returns_none_for_unknown_id():
+    assert get_conversation_history(uuid.uuid4()) is None
+
+
+def test_get_conversation_history_returns_all_messages_oldest_first():
+    conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        get_or_create_conversation(session, conversation_id)
+        append_message(session, conversation_id, "user", "first")
+        append_message(session, conversation_id, "assistant", "second")
+        session.commit()
+
+    history = get_conversation_history(conversation_id)
+
+    assert history is not None
+    assert history.conversation_id == conversation_id
+    assert [m.content for m in history.messages] == ["first", "second"]
+    assert [m.role for m in history.messages] == ["user", "assistant"]

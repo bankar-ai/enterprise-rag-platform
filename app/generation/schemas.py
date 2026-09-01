@@ -1,6 +1,7 @@
 """Pydantic schemas for the generation API's request and response."""
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -49,3 +50,18 @@ class GenerationResponse(BaseModel):
     answer: str
     citations: list[Citation]
     conversation_id: uuid.UUID | None = None
+
+
+class Message(BaseModel):
+    """One persisted turn in a conversation's history, with when it was recorded."""
+
+    role: str
+    content: str
+    created_at: datetime
+
+
+class ConversationHistoryResponse(BaseModel):
+    """The full message history of one conversation, oldest first."""
+
+    conversation_id: uuid.UUID
+    messages: list[Message]
