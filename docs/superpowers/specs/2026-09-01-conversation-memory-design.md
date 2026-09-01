@@ -19,7 +19,7 @@ Out of scope: authentication/ownership of conversations (future ticket, once Aut
 Two new tables, defined in `app/generation/models.py` using the same shared `Base` as `app/ingestion/models.py` (imported from there, not redefined — `alembic/env.py`'s `target_metadata` already targets this one `Base.metadata`; `alembic/env.py` gains an import of `app.generation.models` so its tables register for future autogenerate diffs too):
 
 - `conversations`: `id: UUID` (primary key — the client-supplied `conversation_id`, inserted as-is on first use, never server-generated), `created_at: datetime` (server default `now()`). No `owner_id` yet — the deliberate gap named above.
-- `conversation_messages`: `id: UUID` (primary key), `conversation_id: UUID` (`ForeignKey("conversations.id")`, indexed), `role: str` (`"user"` or `"assistant"`), `content: Text`, `created_at: datetime` (server default `now()`). Ordered by `created_at` per conversation.
+- `conversation_messages`: `id: UUID` (primary key), `conversation_id: UUID` (`ForeignKey("conversations.id")`, indexed), `role: str` (`"user"` or `"assistant"`), `content: Text`, `created_at: datetime` (server default `now()`). Ordered by `created_at` per conversation. [Amendment: `created_at` ordering was found unreliable during implementation (Task 2) -- same-transaction inserts (the user and assistant turns of one call) can land on the same timestamp, making ordering ambiguous. A monotonic `sequence: int` column (`Identity(always=True)`) was added instead, and `get_recent_messages` orders by `sequence`, not `created_at`.]
 
 New Alembic migration: `create_conversations_and_conversation_messages_tables`.
 
