@@ -163,3 +163,50 @@ def test_query_with_conversation_id_continues_across_two_calls(monkeypatch):
 
     assert retrieval_queries[0] == "what is the deployment process?"
     assert retrieval_queries[1] != "what about the second one?"
+
+
+def test_get_conversation_returns_404_for_unknown_id():
+    import uuid
+
+    response = client.get(f"/conversations/{uuid.uuid4()}")
+    assert response.status_code == 404
+
+
+def test_get_conversation_returns_history_ordered_oldest_first(monkeypatch):
+    import uuid
+
+    from app.generation.client import OllamaLLMClient
+    from app.retrieval.schemas import RetrievedChunk
+
+    conversation_id = str(uuid.uuid4())
+    chunk = RetrievedChunk(
+        chunk_id="c1",
+        document_id="doc-1",
+        text="deployment has three steps",
+        section_path=["Intro"],
+        page_start=1,
+        page_end=1,
+        source_filename="doc.pdf",
+        score=0.9,
+    )
+    monkeypatch.setattr(
+        "app.generation.service.retrieval_search", lambda *a, **k: [chunk]
+    )
+    monkeypatch.setattr(
+        OllamaLLMClient, "generate", lambda self, system_prompt, user_prompt: "the answer"
+    )
+
+    create_response = client.post(
+        "/generation/query",
+        json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+    )
+    assert create_response.status_code == 200
+
+    response = client.get(f"/conversations/{conversation_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["conversation_id"] == conversation_id
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+    assert body["messages"][0]["content"] == "what is the deployment process?"
+    assert body["messages"][1]["content"] == "the answer"
