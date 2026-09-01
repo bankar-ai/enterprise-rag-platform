@@ -43,7 +43,7 @@ def get_recent_messages(
     rows = session.scalars(
         select(ConversationMessageRecord)
         .where(ConversationMessageRecord.conversation_id == conversation_id)
-        .order_by(ConversationMessageRecord.created_at.desc())
+        .order_by(ConversationMessageRecord.sequence.desc())
         .limit(limit)
     ).all()
     return list(reversed(rows))
