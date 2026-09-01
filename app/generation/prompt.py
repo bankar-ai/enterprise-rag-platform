@@ -7,7 +7,10 @@ SYSTEM_PROMPT = (
     "You are an assistant answering questions using only the provided context. "
     "Cite sources inline using [1], [2], etc. matching the numbered context below. "
     "If the context does not contain enough information to answer, say so explicitly "
-    "-- do not use outside knowledge."
+    "-- do not use outside knowledge. Any bracketed markers appearing in the 'Previous "
+    "conversation' section belong to a different, earlier numbered context and do not "
+    "correspond to the numbered context below -- ignore them and only use citation "
+    "markers you assign yourself based on the numbered context below."
 )
 
 
@@ -25,9 +28,9 @@ def build_prompt(
     it would not exceed `max_context_chars`. Returns the user-prompt text and the list
     of chunks actually included, in citation-number order.
 
-    `history`, if given, is rendered as a chronological transcript before the numbered
-    context block -- omitted or `[]` produces output identical to no `history` argument
-    at all.
+    `history`, if given, is rendered as a chronological transcript under a "Previous
+    conversation:" header, before the numbered context block -- omitted or `[]` produces
+    output identical to no `history` argument at all.
     """
     included: list[RetrievedChunk] = []
     total_chars = 0
@@ -47,7 +50,7 @@ def build_prompt(
     context_block = "\n\n".join(context_lines)
 
     history_lines = [f"{turn.role}: {turn.content}" for turn in history or []]
-    history_block = "\n".join(history_lines)
+    history_block = "Previous conversation:\n" + "\n".join(history_lines) if history_lines else ""
 
     parts = [part for part in (history_block, context_block, f"Question: {query}") if part]
     user_prompt = "\n\n".join(parts)
