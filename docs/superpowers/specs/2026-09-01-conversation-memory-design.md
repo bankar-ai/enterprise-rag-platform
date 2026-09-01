@@ -18,7 +18,7 @@ Out of scope: authentication/ownership of conversations (future ticket, once Aut
 
 Two new tables, defined in `app/generation/models.py` using the same shared `Base` as `app/ingestion/models.py` (imported from there, not redefined — `alembic/env.py`'s `target_metadata` already targets this one `Base.metadata`; `alembic/env.py` gains an import of `app.generation.models` so its tables register for future autogenerate diffs too):
 
-- `conversations`: `id: UUID` (primary key, server-generated via `gen_random_uuid()` / Python-side `uuid4()`), `created_at: datetime` (server default `now()`). No `owner_id` yet — the deliberate gap named above.
+- `conversations`: `id: UUID` (primary key — the client-supplied `conversation_id`, inserted as-is on first use, never server-generated), `created_at: datetime` (server default `now()`). No `owner_id` yet — the deliberate gap named above.
 - `conversation_messages`: `id: UUID` (primary key), `conversation_id: UUID` (`ForeignKey("conversations.id")`, indexed), `role: str` (`"user"` or `"assistant"`), `content: Text`, `created_at: datetime` (server default `now()`). Ordered by `created_at` per conversation.
 
 New Alembic migration: `create_conversations_and_conversation_messages_tables`.
@@ -27,11 +27,13 @@ New Alembic migration: `create_conversations_and_conversation_messages_tables`.
 
 `app/generation/schemas.py`:
 - `GenerationQuery` gains `conversation_id: UUID | None = Field(default=None)`.
-- `GenerationResponse` gains `conversation_id: UUID` (always populated — the caller's ID echoed back, or a newly server-generated one).
+- `GenerationResponse` gains `conversation_id: UUID | None` — `null` when the call was stateless (no `conversation_id` given), otherwise the conversation's ID (echoed back, or the one just created).
 
-Server-generates every `conversation_id`; the client never picks one. If a `conversation_id` is provided but no matching `conversations` row exists, the router returns `404` (not a silent new conversation under that ID) — a not-found ID means a typo or stale reference, not something to paper over.
+`conversation_id` is a **stateless/stateful switch, not just a continuation token**:
+- **Omitted / `null`** → fully stateless, byte-for-byte ERP-017 behavior: no history loaded, no rewriting, nothing persisted, `response.conversation_id = null`. This is the default and requires no client changes to keep working exactly as before.
+- **Provided** → the client mints its own UUID (e.g. `uuid4()` client-side) client-side rather than the server assigning one. If no `conversations` row with that ID exists yet, the server creates one on this call (the conversation's first turn); if it exists, the server loads its history and continues it. There is no "unknown ID" error case — any client-supplied ID is valid to start or continue. UUID4's collision probability is cryptographically negligible, and this carries the same trust model already named above (bearer capability, no ownership check) — an ID is not a secret to be validated against a registry, just a label.
 
-`app/generation/router.py`: catches a new `ConversationNotFoundError` (raised by `service.generate`) and maps it to `404`, alongside the existing catch-all → `503`.
+No `ConversationNotFoundError`, no new `404` case — this simplifies the router to exactly today's two outcomes (`200` / `503`), no new exception-to-status mapping needed.
 
 ## Query Rewriting
 
@@ -52,27 +54,26 @@ The rewritten query is used for retrieval only. The original raw user text is wh
 ## Service Flow (`app/generation/service.py`)
 
 `generate(..., conversation_id: UUID | None = None, ...)`:
-1. Open a session (`get_session_factory()`, same pattern as `retrieval.service.search`'s internal session).
-2. If `conversation_id` given: load the conversation row (404 via `ConversationNotFoundError` if missing) and its last `history_window_turns` messages. If not given: no history, no rewrite, new conversation created later.
-3. If history is non-empty: `rewritten_query = rewrite_query(query, history, llm_client)`. Else: `rewritten_query = query`.
+1. If `conversation_id` is `None`: skip straight to ERP-017's existing behavior — retrieve, generate, return, with `conversation_id=None` in the response. No session opened for conversation state, no rewrite, nothing persisted. This is the byte-for-byte-unchanged path.
+2. If `conversation_id` is given: open a session (`get_session_factory()`, same pattern as `retrieval.service.search`'s internal session) and load that conversation's last `history_window_turns` messages (`[]` if the conversation doesn't exist yet — this is its first turn, not an error).
+3. If history is non-empty: `rewritten_query = rewrite_query(query, history, llm_client)`. Else (first turn of a new or still-empty conversation): `rewritten_query = query`.
 4. `chunks = retrieval_search(rewritten_query, top_k, rerank=rerank, expand_sections=expand_sections)` — unchanged call, own internal session as today.
 5. Empty `chunks` short-circuits to `NO_CONTEXT_ANSWER` as today — but the turn is still persisted (step 7), so an unanswerable follow-up remains part of the conversation's record rather than vanishing.
 6. Otherwise: `build_prompt(query, chunks, settings.max_context_chars, history=history)` → `llm_client.generate(...)`.
-7. Persist: if `conversation_id` was `None`, insert a new `conversations` row and flush to get its ID; insert the `"user"` message (raw `query`) and the `"assistant"` message (the answer); commit once, only after generation succeeded. On any earlier failure, nothing is committed — no dangling conversation or half-written turn.
-8. Return `GenerationResponse(answer=..., citations=..., conversation_id=...)`.
+7. Persist (only reached when `conversation_id` was given): get-or-create the `conversations` row for that ID (create-and-flush if it doesn't exist yet); insert the `"user"` message (raw `query`) and the `"assistant"` message (the answer); commit once, only after generation succeeded. On any earlier failure, nothing is committed — no dangling conversation or half-written turn.
+8. Return `GenerationResponse(answer=..., citations=..., conversation_id=...)` — `conversation_id` echoes the input when given, stays `None` when it wasn't.
 
 ## Error Handling
 
-- Unknown `conversation_id` → `ConversationNotFoundError` → router `404`.
-- Any LLM failure (rewrite or generation) → existing catch-all → router `503`, matching ERP-017's contract exactly. Nothing is committed in this case.
+Any LLM failure (rewrite or generation) → existing catch-all → router `503`, matching ERP-017's contract exactly and requiring no new exception type or status-code mapping. Nothing is committed in this case.
 
 ## Testing
 
 - `app/generation/repository.py` (new, mirroring `app/ingestion/repository.py`'s style): tests against a real Postgres test database (existing CI/dev pattern) for `create_conversation`, `append_message`, `get_recent_messages`.
 - `rewrite_query`: unit tests with an injected fake `LLMClient`, asserting the exact prompt shape and that it's *not* called when history is empty.
 - `build_prompt`: new test cases for the `history` parameter (rendered before context, chronological order, absent when `history=[]`).
-- `service.generate`: extended with `conversation_id`-present cases (new conversation, continuing conversation, unknown ID → `ConversationNotFoundError`, short-circuit-still-persists) using injected fakes, consistent with ERP-017's testing pattern; a regression test proves the no-`conversation_id` path is byte-for-byte unchanged from ERP-017.
-- `router.py`: end-to-end tests for the new `404` case and a two-call sequence (first call omits `conversation_id`, second call reuses the returned one) asserting the second call's retrieval query differs from the raw text (i.e., rewriting actually ran).
+- `service.generate`: extended with `conversation_id`-present cases (new conversation created on first use, continuing an existing conversation, short-circuit-still-persists) using injected fakes, consistent with ERP-017's testing pattern; a regression test proves the no-`conversation_id` path is byte-for-byte unchanged from ERP-017 (no session opened, nothing persisted, `conversation_id=None` in the response).
+- `router.py`: end-to-end test for a two-call sequence — first call provides a client-generated `conversation_id` (its first turn), second call reuses it — asserting the second call's retrieval query differs from the raw follow-up text (i.e., rewriting actually ran) and that `response.conversation_id` matches what was sent on both calls.
 - 90% coverage gate applies, per existing CI configuration.
 
 ## New Dependencies
