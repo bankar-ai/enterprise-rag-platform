@@ -6,9 +6,21 @@ from app.core.db import get_session_factory
 from app.generation.client import LLMClient, OllamaLLMClient
 from app.generation.config import GenerationSettings, get_generation_settings
 from app.generation.prompt import SYSTEM_PROMPT, build_prompt
-from app.generation.repository import append_message, get_or_create_conversation, get_recent_messages
+from app.generation.repository import (
+    append_message,
+    get_all_messages,
+    get_conversation,
+    get_or_create_conversation,
+    get_recent_messages,
+)
 from app.generation.rewrite import rewrite_query
-from app.generation.schemas import Citation, ConversationTurn, GenerationResponse
+from app.generation.schemas import (
+    Citation,
+    ConversationHistoryResponse,
+    ConversationTurn,
+    GenerationResponse,
+    Message,
+)
 from app.retrieval.schemas import RetrievedChunk
 from app.retrieval.service import search as retrieval_search
 
@@ -109,3 +121,18 @@ def generate(
         write_session.commit()
 
     return GenerationResponse(answer=answer, citations=citations, conversation_id=conversation_id)
+
+
+def get_conversation_history(conversation_id: uuid.UUID) -> ConversationHistoryResponse | None:
+    """Return every message in `conversation_id`, oldest first, or `None` if it doesn't exist."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        if get_conversation(session, conversation_id) is None:
+            return None
+        records = get_all_messages(session, conversation_id)
+
+    messages = [
+        Message(role=record.role, content=record.content, created_at=record.created_at)
+        for record in records
+    ]
+    return ConversationHistoryResponse(conversation_id=conversation_id, messages=messages)
