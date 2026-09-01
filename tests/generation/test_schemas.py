@@ -64,3 +64,33 @@ def test_conversation_turn_round_trip():
 
     turn = ConversationTurn(role="user", content="hello")
     assert turn.model_dump() == {"role": "user", "content": "hello"}
+
+
+def test_message_round_trip():
+    from datetime import datetime
+
+    from app.generation.schemas import Message
+
+    now = datetime(2026, 9, 1, 12, 0, 0)
+    message = Message(role="user", content="hello", created_at=now)
+    assert message.model_dump() == {"role": "user", "content": "hello", "created_at": now}
+
+
+def test_conversation_history_response_round_trip():
+    from datetime import datetime
+
+    from app.generation.schemas import ConversationHistoryResponse, Message
+
+    conversation_id = uuid.uuid4()
+    message = Message(role="user", content="hello", created_at=datetime(2026, 9, 1, 12, 0, 0))
+    response = ConversationHistoryResponse(conversation_id=conversation_id, messages=[message])
+
+    assert response.conversation_id == conversation_id
+    assert response.messages == [message]
+
+
+def test_conversation_history_response_empty_messages():
+    from app.generation.schemas import ConversationHistoryResponse
+
+    response = ConversationHistoryResponse(conversation_id=uuid.uuid4(), messages=[])
+    assert response.messages == []
