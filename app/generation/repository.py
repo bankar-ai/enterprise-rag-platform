@@ -40,14 +40,10 @@ def get_recent_messages(
 
     `[]` if the conversation doesn't exist or has no messages yet.
     """
-    # Get all messages ordered oldest-first
-    all_messages = session.scalars(
+    rows = session.scalars(
         select(ConversationMessageRecord)
         .where(ConversationMessageRecord.conversation_id == conversation_id)
-        .order_by(ConversationMessageRecord.created_at.asc(), ConversationMessageRecord.id.asc())
+        .order_by(ConversationMessageRecord.created_at.desc())
+        .limit(limit)
     ).all()
-
-    # Return the last N messages (most recent), which are already in oldest-first order
-    if not limit or limit <= 0:
-        return []
-    return all_messages[-limit:] if len(all_messages) > 0 else []
+    return list(reversed(rows))
