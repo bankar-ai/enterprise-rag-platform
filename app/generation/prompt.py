@@ -1,5 +1,6 @@
 """Prompt construction for LLM-backed answer generation."""
 
+from app.generation.schemas import ConversationTurn
 from app.retrieval.schemas import RetrievedChunk
 
 SYSTEM_PROMPT = (
@@ -11,7 +12,10 @@ SYSTEM_PROMPT = (
 
 
 def build_prompt(
-    query: str, chunks: list[RetrievedChunk], max_context_chars: int
+    query: str,
+    chunks: list[RetrievedChunk],
+    max_context_chars: int,
+    history: list[ConversationTurn] | None = None,
 ) -> tuple[str, list[RetrievedChunk]]:
     """Build the numbered-context user prompt, truncated to `max_context_chars`.
 
@@ -20,6 +24,10 @@ def build_prompt(
     doesn't produce empty context); every subsequent chunk is included only if adding
     it would not exceed `max_context_chars`. Returns the user-prompt text and the list
     of chunks actually included, in citation-number order.
+
+    `history`, if given, is rendered as a chronological transcript before the numbered
+    context block -- omitted or `[]` produces output identical to no `history` argument
+    at all.
     """
     included: list[RetrievedChunk] = []
     total_chars = 0
@@ -38,5 +46,9 @@ def build_prompt(
         )
     context_block = "\n\n".join(context_lines)
 
-    user_prompt = f"{context_block}\n\nQuestion: {query}" if context_block else f"Question: {query}"
+    history_lines = [f"{turn.role}: {turn.content}" for turn in history or []]
+    history_block = "\n".join(history_lines)
+
+    parts = [part for part in (history_block, context_block, f"Question: {query}") if part]
+    user_prompt = "\n\n".join(parts)
     return user_prompt, included

@@ -1,4 +1,5 @@
 from app.generation.prompt import build_prompt
+from app.generation.schemas import ConversationTurn
 from app.retrieval.schemas import RetrievedChunk
 
 
@@ -51,3 +52,41 @@ def test_build_prompt_with_no_chunks_returns_empty_context():
 
     assert included == []
     assert user_prompt.endswith("Question: q")
+
+
+def test_build_prompt_renders_history_before_context():
+    chunks = [_chunk("c1", "First chunk text.")]
+    history = [
+        ConversationTurn(role="user", content="what is the deployment process?"),
+        ConversationTurn(role="assistant", content="it has three steps."),
+    ]
+
+    user_prompt, included = build_prompt(
+        "what about the second one?", chunks, max_context_chars=1000, history=history
+    )
+
+    history_index = user_prompt.index("user: what is the deployment process?")
+    assistant_index = user_prompt.index("assistant: it has three steps.")
+    context_index = user_prompt.index("[1] First chunk text.")
+    question_index = user_prompt.index("Question: what about the second one?")
+    assert history_index < assistant_index < context_index < question_index
+    assert included == chunks
+
+
+def test_build_prompt_with_no_history_matches_omitted_history():
+    chunks = [_chunk("c1", "First chunk text.")]
+
+    with_none, included_a = build_prompt("q", chunks, max_context_chars=1000, history=None)
+    omitted, included_b = build_prompt("q", chunks, max_context_chars=1000)
+
+    assert with_none == omitted
+    assert included_a == included_b == chunks
+
+
+def test_build_prompt_with_empty_history_list_matches_omitted_history():
+    chunks = [_chunk("c1", "First chunk text.")]
+
+    with_empty, _ = build_prompt("q", chunks, max_context_chars=1000, history=[])
+    omitted, _ = build_prompt("q", chunks, max_context_chars=1000)
+
+    assert with_empty == omitted
