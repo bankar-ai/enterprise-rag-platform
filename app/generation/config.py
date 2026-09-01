@@ -17,6 +17,7 @@ class GenerationSettings(BaseSettings):
     model: str = "qwen3"
     max_context_chars: int = 8000
     temperature: float = 0.1
+    history_window_turns: int = 6
 
 
 @lru_cache
