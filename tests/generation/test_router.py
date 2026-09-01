@@ -103,3 +103,63 @@ def test_query_returns_503_when_llm_backend_unavailable(monkeypatch):
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Generation query failed"}
+
+
+def test_query_omitted_conversation_id_returns_null_conversation_id():
+    response = client.post("/generation/query", json={"query": "anything"})
+    assert response.status_code == 200
+    assert response.json()["conversation_id"] is None
+
+
+def test_query_with_conversation_id_continues_across_two_calls(monkeypatch):
+    import uuid
+
+    from app.retrieval.schemas import RetrievedChunk
+
+    conversation_id = str(uuid.uuid4())
+    chunk = RetrievedChunk(
+        chunk_id="c1",
+        document_id="doc-1",
+        text="deployment has three steps",
+        section_path=["Intro"],
+        page_start=1,
+        page_end=1,
+        source_filename="doc.pdf",
+        score=0.9,
+    )
+    retrieval_queries = []
+
+    def _fake_search(query, top_k, rerank=False, expand_sections=False):
+        retrieval_queries.append(query)
+        return [chunk]
+
+    monkeypatch.setattr("app.generation.service.retrieval_search", _fake_search)
+
+    from app.generation.client import OllamaLLMClient
+
+    # Three canned answers are needed, not two: the first HTTP call consumes one
+    # (final synthesis, turn 1 has no history to rewrite); the second HTTP call
+    # consumes two (query rewrite, since history now exists, then final synthesis).
+    answers = iter(["it has three steps.", "the second step is test.", "here is more detail."])
+    monkeypatch.setattr(
+        OllamaLLMClient,
+        "generate",
+        lambda self, system_prompt, user_prompt: next(answers),
+    )
+
+    first = client.post(
+        "/generation/query",
+        json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+    )
+    assert first.status_code == 200
+    assert first.json()["conversation_id"] == conversation_id
+
+    second = client.post(
+        "/generation/query",
+        json={"query": "what about the second one?", "conversation_id": conversation_id},
+    )
+    assert second.status_code == 200
+    assert second.json()["conversation_id"] == conversation_id
+
+    assert retrieval_queries[0] == "what is the deployment process?"
+    assert retrieval_queries[1] != "what about the second one?"

@@ -1,17 +1,24 @@
 """Prompt construction for LLM-backed answer generation."""
 
+from app.generation.schemas import ConversationTurn
 from app.retrieval.schemas import RetrievedChunk
 
 SYSTEM_PROMPT = (
     "You are an assistant answering questions using only the provided context. "
     "Cite sources inline using [1], [2], etc. matching the numbered context below. "
     "If the context does not contain enough information to answer, say so explicitly "
-    "-- do not use outside knowledge."
+    "-- do not use outside knowledge. Any bracketed markers appearing in the 'Previous "
+    "conversation' section belong to a different, earlier numbered context and do not "
+    "correspond to the numbered context below -- ignore them and only use citation "
+    "markers you assign yourself based on the numbered context below."
 )
 
 
 def build_prompt(
-    query: str, chunks: list[RetrievedChunk], max_context_chars: int
+    query: str,
+    chunks: list[RetrievedChunk],
+    max_context_chars: int,
+    history: list[ConversationTurn] | None = None,
 ) -> tuple[str, list[RetrievedChunk]]:
     """Build the numbered-context user prompt, truncated to `max_context_chars`.
 
@@ -20,6 +27,10 @@ def build_prompt(
     doesn't produce empty context); every subsequent chunk is included only if adding
     it would not exceed `max_context_chars`. Returns the user-prompt text and the list
     of chunks actually included, in citation-number order.
+
+    `history`, if given, is rendered as a chronological transcript under a "Previous
+    conversation:" header, before the numbered context block -- omitted or `[]` produces
+    output identical to no `history` argument at all.
     """
     included: list[RetrievedChunk] = []
     total_chars = 0
@@ -38,5 +49,9 @@ def build_prompt(
         )
     context_block = "\n\n".join(context_lines)
 
-    user_prompt = f"{context_block}\n\nQuestion: {query}" if context_block else f"Question: {query}"
+    history_lines = [f"{turn.role}: {turn.content}" for turn in history or []]
+    history_block = "Previous conversation:\n" + "\n".join(history_lines) if history_lines else ""
+
+    parts = [part for part in (history_block, context_block, f"Question: {query}") if part]
+    user_prompt = "\n\n".join(parts)
     return user_prompt, included
