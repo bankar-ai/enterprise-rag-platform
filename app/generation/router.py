@@ -21,6 +21,7 @@ def query(query_request: GenerationQuery) -> GenerationResponse:
             query_request.top_k,
             rerank=query_request.rerank,
             expand_sections=query_request.expand_sections,
+            conversation_id=query_request.conversation_id,
         )
     except Exception as exc:
         logger.exception("Generation query failed")
