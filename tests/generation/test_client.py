@@ -38,3 +38,43 @@ def test_generate_calls_ollama_with_system_and_user_messages(monkeypatch):
             False,
         )
     ]
+
+
+def test_generate_stream_calls_ollama_with_stream_true_and_yields_content(monkeypatch):
+    class _FakeStreamingOllamaClient:
+        def __init__(self, host):
+            self.host = host
+            self.calls = []
+
+        def chat(self, model, messages, options, think=None, stream=False):
+            self.calls.append((model, messages, options, think, stream))
+            return iter(
+                [
+                    ollama.ChatResponse(message=ollama.Message(role="assistant", content="Hello")),
+                    ollama.ChatResponse(message=ollama.Message(role="assistant", content=" world")),
+                    ollama.ChatResponse(message=ollama.Message(role="assistant", content=None)),
+                ]
+            )
+
+    fake = _FakeStreamingOllamaClient(host="http://fake:11434")
+    monkeypatch.setattr("app.generation.client.ollama.Client", lambda host: fake)
+    settings = GenerationSettings(
+        ollama_host="http://fake:11434", model="test-model", temperature=0.2
+    )
+
+    client = OllamaLLMClient(settings)
+    chunks = list(client.generate_stream("system text", "user text"))
+
+    assert chunks == ["Hello", " world"]
+    assert fake.calls == [
+        (
+            "test-model",
+            [
+                {"role": "system", "content": "system text"},
+                {"role": "user", "content": "user text"},
+            ],
+            {"temperature": 0.2},
+            False,
+            True,
+        )
+    ]
