@@ -3,7 +3,7 @@ import uuid
 from app.core.db import get_session_factory
 from app.generation.config import GenerationSettings
 from app.generation.repository import append_message, get_or_create_conversation, get_recent_messages
-from app.generation.service import NO_CONTEXT_ANSWER, generate, get_conversation_history
+from app.generation.service import NO_CONTEXT_ANSWER, generate, generate_stream, get_conversation_history
 from app.retrieval.schemas import RetrievedChunk
 
 
@@ -28,6 +28,22 @@ class _FakeLLMClient:
     def generate(self, system_prompt, user_prompt):
         self.calls.append((system_prompt, user_prompt))
         return self._answer
+
+
+class _FakeStreamingLLMClient:
+    def __init__(self, chunks, rewritten_query=None):
+        self._chunks = chunks
+        self._rewritten_query = rewritten_query
+        self.stream_calls = []
+        self.generate_calls = []
+
+    def generate(self, system_prompt, user_prompt):
+        self.generate_calls.append((system_prompt, user_prompt))
+        return self._rewritten_query or "unused"
+
+    def generate_stream(self, system_prompt, user_prompt):
+        self.stream_calls.append((system_prompt, user_prompt))
+        yield from self._chunks
 
 
 def test_generate_short_circuits_on_empty_retrieval(monkeypatch):
@@ -232,3 +248,131 @@ def test_get_conversation_history_returns_all_messages_oldest_first():
     assert history.conversation_id == conversation_id
     assert [m.content for m in history.messages] == ["first", "second"]
     assert [m.role for m in history.messages] == ["user", "assistant"]
+
+
+def test_generate_stream_stateless_yields_citations_then_tokens_then_done(monkeypatch):
+    chunks = [_chunk("c1"), _chunk("c2")]
+    monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: chunks)
+    fake_llm = _FakeStreamingLLMClient(["Hello", " world"])
+
+    events = list(generate_stream("what is X?", top_k=5, llm_client=fake_llm))
+
+    assert events == [
+        (
+            "citations",
+            {
+                "citations": [
+                    {
+                        "chunk_id": "c1",
+                        "document_id": "doc-1",
+                        "section_path": ["Intro"],
+                        "page_start": 1,
+                        "page_end": 1,
+                        "source_filename": "doc.pdf",
+                    },
+                    {
+                        "chunk_id": "c2",
+                        "document_id": "doc-1",
+                        "section_path": ["Intro"],
+                        "page_start": 1,
+                        "page_end": 1,
+                        "source_filename": "doc.pdf",
+                    },
+                ]
+            },
+        ),
+        ("token", {"text": "Hello"}),
+        ("token", {"text": " world"}),
+        ("done", {"conversation_id": None}),
+    ]
+
+
+def test_generate_stream_stateless_short_circuits_on_empty_retrieval(monkeypatch):
+    monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [])
+    fake_llm = _FakeStreamingLLMClient(["should not be used"])
+
+    events = list(generate_stream("what is X?", top_k=5, llm_client=fake_llm))
+
+    assert events == [
+        ("citations", {"citations": []}),
+        ("token", {"text": NO_CONTEXT_ANSWER}),
+        ("done", {"conversation_id": None}),
+    ]
+    assert fake_llm.stream_calls == []
+
+
+def test_generate_stream_with_conversation_id_persists_after_done(monkeypatch):
+    conversation_id = uuid.uuid4()
+    monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [_chunk("c1")])
+    fake_llm = _FakeStreamingLLMClient(["the ", "answer"])
+
+    events = list(
+        generate_stream("what is X?", top_k=5, conversation_id=conversation_id, llm_client=fake_llm)
+    )
+
+    assert events[-1] == ("done", {"conversation_id": str(conversation_id)})
+    assert fake_llm.generate_calls == []
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        messages = get_recent_messages(session, conversation_id, limit=10)
+    assert [m.content for m in messages] == ["what is X?", "the answer"]
+
+
+def test_generate_stream_second_turn_rewrites_query_using_history(monkeypatch):
+    conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        get_or_create_conversation(session, conversation_id)
+        append_message(session, conversation_id, "user", "what is the deployment process?")
+        append_message(session, conversation_id, "assistant", "it has three steps.")
+        session.commit()
+
+    captured_retrieval_query = {}
+
+    def _fake_search(query, top_k, rerank=False, expand_sections=False):
+        captured_retrieval_query["query"] = query
+        return [_chunk("c1")]
+
+    monkeypatch.setattr("app.generation.service.retrieval_search", _fake_search)
+    fake_llm = _FakeStreamingLLMClient(
+        ["the second step is test."],
+        rewritten_query="what is the second step in the deployment process?",
+    )
+
+    events = list(
+        generate_stream(
+            "what about the second one?", top_k=5, conversation_id=conversation_id, llm_client=fake_llm
+        )
+    )
+
+    assert captured_retrieval_query["query"] == "what is the second step in the deployment process?"
+    assert len(fake_llm.generate_calls) == 1
+    assert events[-1] == ("done", {"conversation_id": str(conversation_id)})
+
+
+def test_generate_stream_exception_mid_stream_yields_error_and_persists_nothing(monkeypatch):
+    conversation_id = uuid.uuid4()
+    monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [_chunk("c1")])
+
+    class _RaisingLLMClient:
+        def generate(self, system_prompt, user_prompt):
+            raise AssertionError("rewrite should not run on a conversation's first turn")
+
+        def generate_stream(self, system_prompt, user_prompt):
+            yield "partial"
+            raise RuntimeError("ollama connection dropped")
+
+    events = list(
+        generate_stream(
+            "what is X?", top_k=5, conversation_id=conversation_id, llm_client=_RaisingLLMClient()
+        )
+    )
+
+    assert ("token", {"text": "partial"}) in events
+    assert events[-1] == ("error", {"detail": "Generation query failed"})
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        messages = get_recent_messages(session, conversation_id, limit=10)
+    assert messages == []
