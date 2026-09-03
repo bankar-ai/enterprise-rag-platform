@@ -1,12 +1,16 @@
 """Generation API: grounded answer synthesis over retrieved chunks."""
 
+import json
 import logging
 import uuid
+from collections.abc import Iterator
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.generation.schemas import ConversationHistoryResponse, GenerationQuery, GenerationResponse
-from app.generation.service import generate, get_conversation_history
+from app.generation.service import generate, generate_stream, get_conversation_history
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,32 @@ def query(query_request: GenerationQuery) -> GenerationResponse:
     except Exception as exc:
         logger.exception("Generation query failed")
         raise HTTPException(status_code=503, detail="Generation query failed") from exc
+
+
+def _format_sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _event_stream(query_request: GenerationQuery) -> Iterator[str]:
+    for event, data in generate_stream(
+        query_request.query,
+        query_request.top_k,
+        rerank=query_request.rerank,
+        expand_sections=query_request.expand_sections,
+        conversation_id=query_request.conversation_id,
+    ):
+        yield _format_sse(event, data)
+
+
+@router.post("/query/stream")
+def query_stream(query_request: GenerationQuery) -> StreamingResponse:
+    """Run retrieval + LLM synthesis, streaming the answer as Server-Sent Events.
+
+    Unlike `POST /generation/query`, failures surface as a terminal `error` SSE event
+    (status stays 200, since headers are already sent once streaming starts) rather than
+    an HTTP error status -- see `generate_stream`'s docstring.
+    """
+    return StreamingResponse(_event_stream(query_request), media_type="text/event-stream")
 
 
 @conversations_router.get("/{conversation_id}")
