@@ -151,8 +151,8 @@ def generate_stream(
     suspended `yield`) or a mid-generation exception both skip it, leaving conversation
     history exactly as it was before the request.
     """
-    settings = settings or get_generation_settings()
     try:
+        settings = settings or get_generation_settings()
         if conversation_id is None:
             chunks = retrieval_search(query, top_k, rerank=rerank, expand_sections=expand_sections)
             if not chunks:
