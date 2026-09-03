@@ -57,7 +57,11 @@ def query_stream(query_request: GenerationQuery) -> StreamingResponse:
     (status stays 200, since headers are already sent once streaming starts) rather than
     an HTTP error status -- see `generate_stream`'s docstring.
     """
-    return StreamingResponse(_event_stream(query_request), media_type="text/event-stream")
+    return StreamingResponse(
+        _event_stream(query_request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @conversations_router.get("/{conversation_id}")

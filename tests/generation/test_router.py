@@ -1,4 +1,4 @@
-﻿import json
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -233,6 +233,8 @@ def test_query_stream_returns_no_context_sse_when_retrieval_empty():
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
     events = _parse_sse(response.text)
     assert events == [
         ("citations", {"citations": []}),
