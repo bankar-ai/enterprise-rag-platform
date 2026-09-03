@@ -1,6 +1,6 @@
 """Answer generation via a local Ollama chat model."""
 
-from typing import Protocol
+from typing import Iterator, Protocol
 
 import ollama
 
@@ -12,6 +12,10 @@ class LLMClient(Protocol):
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         """Return the model's answer text for the given system/user prompts."""
+        ...
+
+    def generate_stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Yield the model's answer text in chunks, in order, for the given prompts."""
         ...
 
 
@@ -36,3 +40,20 @@ class OllamaLLMClient:
             think=False,
         )
         return response.message.content or ""
+
+    def generate_stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Stream `system_prompt`/`user_prompt` to Ollama, yielding response text chunks in order."""
+        stream = self._client.chat(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            options={"temperature": self._temperature},
+            think=False,
+            stream=True,
+        )
+        for chunk in stream:
+            content = chunk.message.content
+            if content:
+                yield content

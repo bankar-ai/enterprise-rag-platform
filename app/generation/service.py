@@ -1,6 +1,8 @@
 """Grounded answer generation over hybrid-retrieved chunks, with optional multi-turn memory."""
 
+import logging
 import uuid
+from typing import Any, Iterator
 
 from app.core.db import get_session_factory
 from app.generation.client import LLMClient, OllamaLLMClient
@@ -23,6 +25,8 @@ from app.generation.schemas import (
 )
 from app.retrieval.schemas import RetrievedChunk
 from app.retrieval.service import search as retrieval_search
+
+logger = logging.getLogger(__name__)
 
 NO_CONTEXT_ANSWER = "I don't have enough information in the ingested documents to answer this question."
 
@@ -121,6 +125,90 @@ def generate(
         write_session.commit()
 
     return GenerationResponse(answer=answer, citations=citations, conversation_id=conversation_id)
+
+
+def generate_stream(
+    query: str,
+    top_k: int,
+    rerank: bool = False,
+    expand_sections: bool = False,
+    conversation_id: uuid.UUID | None = None,
+    settings: GenerationSettings | None = None,
+    llm_client: LLMClient | None = None,
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Streaming counterpart to `generate`: yields `(event, data)` tuples instead of returning one response.
+
+    Event sequence on success: one `("citations", {"citations": [...]})`, zero or more
+    `("token", {"text": "..."})` (one per chunk of generated text), then a terminal
+    `("done", {"conversation_id": str | None})`. On any failure, yields a terminal
+    `("error", {"detail": "..."})` instead of `"done"` -- callers must treat `"error"` as
+    the end of the stream, not attempt to resume iteration.
+
+    Shares `generate()`'s stateless/stateful branching, rewrite, and persistence semantics
+    exactly (see `generate`'s docstring) -- only the delivery mechanism differs. Persistence
+    for a stateful request happens only after the full answer is assembled, immediately
+    before the `"done"` event, so a client disconnect (which raises `GeneratorExit` at the
+    suspended `yield`) or a mid-generation exception both skip it, leaving conversation
+    history exactly as it was before the request.
+    """
+    try:
+        settings = settings or get_generation_settings()
+        if conversation_id is None:
+            chunks = retrieval_search(query, top_k, rerank=rerank, expand_sections=expand_sections)
+            if not chunks:
+                yield "citations", {"citations": []}
+                yield "token", {"text": NO_CONTEXT_ANSWER}
+                yield "done", {"conversation_id": None}
+                return
+
+            llm_client = llm_client or OllamaLLMClient(settings)
+            user_prompt, included_chunks = build_prompt(query, chunks, settings.max_context_chars)
+            yield "citations", {"citations": [c.model_dump() for c in _citations_for(included_chunks)]}
+            for piece in llm_client.generate_stream(SYSTEM_PROMPT, user_prompt):
+                yield "token", {"text": piece}
+            yield "done", {"conversation_id": None}
+            return
+
+        session_factory = get_session_factory()
+        with session_factory() as read_session:
+            history_records = get_recent_messages(
+                read_session, conversation_id, settings.history_window_turns
+            )
+            history = [ConversationTurn(role=r.role, content=r.content) for r in history_records]
+
+        if history:
+            llm_client = llm_client or OllamaLLMClient(settings)
+            rewritten_query = rewrite_query(query, history, llm_client)
+        else:
+            rewritten_query = query
+
+        chunks = retrieval_search(rewritten_query, top_k, rerank=rerank, expand_sections=expand_sections)
+        if not chunks:
+            yield "citations", {"citations": []}
+            yield "token", {"text": NO_CONTEXT_ANSWER}
+            answer = NO_CONTEXT_ANSWER
+        else:
+            llm_client = llm_client or OllamaLLMClient(settings)
+            user_prompt, included_chunks = build_prompt(
+                query, chunks, settings.max_context_chars, history=history
+            )
+            yield "citations", {"citations": [c.model_dump() for c in _citations_for(included_chunks)]}
+            answer_parts: list[str] = []
+            for piece in llm_client.generate_stream(SYSTEM_PROMPT, user_prompt):
+                answer_parts.append(piece)
+                yield "token", {"text": piece}
+            answer = "".join(answer_parts)
+
+        with session_factory() as write_session:
+            get_or_create_conversation(write_session, conversation_id)
+            append_message(write_session, conversation_id, "user", query)
+            append_message(write_session, conversation_id, "assistant", answer)
+            write_session.commit()
+
+        yield "done", {"conversation_id": str(conversation_id)}
+    except Exception:
+        logger.exception("Streaming generation failed")
+        yield "error", {"detail": "Generation query failed"}
 
 
 def get_conversation_history(conversation_id: uuid.UUID) -> ConversationHistoryResponse | None:
