@@ -19,6 +19,7 @@ class EmbeddingSettings(BaseSettings):
     faiss_index_path: str = "data/faiss_index.bin"
     redis_url: str = "redis://localhost:6379/0"
     cache_ttl_seconds: int = 86400
+    redis_socket_timeout_seconds: float = 2.0
 
 
 @lru_cache
