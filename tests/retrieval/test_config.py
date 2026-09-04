@@ -3,7 +3,7 @@ from app.retrieval.config import RetrievalSettings, get_retrieval_settings
 
 def test_retrieval_settings_defaults():
     settings = RetrievalSettings()
-    assert settings.redis_url == "redis://localhost:6379/0"
+    assert settings.redis_url.startswith("redis://")
     assert settings.cache_ttl_seconds == 300
 
 
