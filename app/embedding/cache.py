@@ -7,11 +7,12 @@ Never load-bearing (ADR-003): every Redis failure degrades to a cache miss
 import hashlib
 import json
 import logging
+from functools import lru_cache
 from typing import Protocol
 
 import redis
 
-from app.embedding.config import EmbeddingSettings
+from app.embedding.config import EmbeddingSettings, get_embedding_settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,12 @@ class RedisEmbeddingCache:
 
     def __init__(self, settings: EmbeddingSettings) -> None:
         """Build a cache bound to `settings.redis_url`, TTL from `settings.cache_ttl_seconds`."""
-        self._client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        self._client = redis.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=settings.redis_socket_timeout_seconds,
+            socket_timeout=settings.redis_socket_timeout_seconds,
+        )
         self._ttl_seconds = settings.cache_ttl_seconds
 
     @staticmethod
@@ -53,7 +59,11 @@ class RedisEmbeddingCache:
             return None
         if raw is None:
             return None
-        vector: list[float] = json.loads(raw)
+        try:
+            vector: list[float] = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            logger.exception("Failed to deserialize cached embedding vector; treating as a cache miss")
+            return None
         return vector
 
     def set(self, model: str, text: str, vector: list[float]) -> None:
@@ -62,3 +72,13 @@ class RedisEmbeddingCache:
             self._client.set(self._key(model, text), json.dumps(vector), ex=self._ttl_seconds)
         except redis.RedisError:
             logger.exception("Redis SET failed; continuing without caching this vector")
+
+
+@lru_cache
+def get_default_embedding_cache() -> EmbeddingCache:
+    """Return the process-wide cached default `EmbeddingCache` (a `RedisEmbeddingCache`).
+
+    Memoized so `OllamaEmbeddingClient` reuses one Redis client/connection pool across
+    instances instead of building a new one every time it falls back to the default cache.
+    """
+    return RedisEmbeddingCache(get_embedding_settings())
