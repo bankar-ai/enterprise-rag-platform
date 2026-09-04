@@ -15,8 +15,8 @@ from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
 from app.ingestion.repository import get_chunks_by_vector_ids, get_sibling_chunks, search_chunks_by_text
-from app.retrieval.cache import RedisRetrievalCache, RetrievalCache
-from app.retrieval.config import get_reranker_settings, get_retrieval_settings
+from app.retrieval.cache import RetrievalCache, get_default_retrieval_cache
+from app.retrieval.config import get_reranker_settings
 from app.retrieval.reranker import FlashRankReranker, Reranker
 from app.retrieval.schemas import RetrievedChunk
 
@@ -131,7 +131,7 @@ def search(
     result of this function, keyed by (`query`, `top_k`, `rerank`, `expand_sections`), is
     cache-aside -- a hit returns immediately without running any of the pipeline below.
     """
-    cache = cache or RedisRetrievalCache(get_retrieval_settings())
+    cache = cache or get_default_retrieval_cache()
     cache_key = _cache_key(query, top_k, rerank, expand_sections)
     cached = cache.get(cache_key)
     if cached is not None:

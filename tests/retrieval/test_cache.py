@@ -1,4 +1,6 @@
-from app.retrieval.cache import RedisRetrievalCache
+import redis
+
+from app.retrieval.cache import RedisRetrievalCache, get_default_retrieval_cache
 from app.retrieval.config import RetrievalSettings
 from app.retrieval.schemas import RetrievedChunk
 
@@ -45,3 +47,27 @@ def test_unreachable_redis_degrades_to_miss_and_noop_set():
     cache = RedisRetrievalCache(settings)
     assert cache.get("key-a") is None
     cache.set("key-a", [_chunk("c1", 0.9)])  # must not raise
+
+
+def test_socket_timeouts_are_passed_to_the_redis_client(redis_settings):
+    settings = redis_settings.model_copy(update={"redis_socket_timeout_seconds": 0.75})
+    cache = RedisRetrievalCache(settings)
+    connection_kwargs = cache._client.connection_pool.connection_kwargs
+    assert connection_kwargs["socket_connect_timeout"] == 0.75
+    assert connection_kwargs["socket_timeout"] == 0.75
+
+
+def test_corrupt_cached_value_degrades_to_miss(redis_settings):
+    client = redis.Redis.from_url(redis_settings.redis_url, decode_responses=True)
+    client.set("retrieval:garbage-key", "not valid json at all {")
+
+    cache = RedisRetrievalCache(redis_settings)
+    assert cache.get("garbage-key") is None
+
+
+def test_get_default_retrieval_cache_is_memoized():
+    get_default_retrieval_cache.cache_clear()
+    try:
+        assert get_default_retrieval_cache() is get_default_retrieval_cache()
+    finally:
+        get_default_retrieval_cache.cache_clear()

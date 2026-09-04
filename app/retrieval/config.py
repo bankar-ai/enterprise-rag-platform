@@ -33,6 +33,7 @@ class RetrievalSettings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
     cache_ttl_seconds: int = 300
+    redis_socket_timeout_seconds: float = 2.0
 
 
 @lru_cache
