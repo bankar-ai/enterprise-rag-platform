@@ -5,6 +5,7 @@ then hydrates the fused results from Postgres. See `.ai/adr/ADR-005.md` for why 
 over score-normalization-based fusion.
 """
 
+import hashlib
 import logging
 
 from sqlalchemy.orm import Session
@@ -14,6 +15,7 @@ from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
 from app.ingestion.repository import get_chunks_by_vector_ids, get_sibling_chunks, search_chunks_by_text
+from app.retrieval.cache import RetrievalCache, get_default_retrieval_cache
 from app.retrieval.config import get_reranker_settings
 from app.retrieval.reranker import FlashRankReranker, Reranker
 from app.retrieval.schemas import RetrievedChunk
@@ -51,6 +53,18 @@ def _reciprocal_rank_fusion(*ranked_id_lists: list[int], k: int = RRF_K) -> list
     max_possible_score = sum(1.0 / (k + 1) for ranked_ids in ranked_id_lists if ranked_ids)
     normalized = [(item_id, score / max_possible_score) for item_id, score in scores.items()]
     return sorted(normalized, key=lambda pair: pair[1], reverse=True)
+
+
+def _cache_key(query: str, top_k: int, rerank: bool, expand_sections: bool) -> str:
+    """Hash the four `search()` parameters that determine its output, for cache lookups."""
+    query_bytes = query.encode()
+    payload = (
+        len(query_bytes).to_bytes(4, "big")
+        + query_bytes
+        + top_k.to_bytes(4, "big")
+        + bytes([rerank, expand_sections])
+    )
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _expand_sections(session: Session, results: list[RetrievedChunk]) -> list[RetrievedChunk]:
@@ -96,6 +110,7 @@ def search(
     rerank: bool = False,
     reranker: Reranker | None = None,
     expand_sections: bool = False,
+    cache: RetrievalCache | None = None,
 ) -> list[RetrievedChunk]:
     """Run hybrid (vector + BM25) search and return up to `top_k` chunks, fused-score order.
 
@@ -111,7 +126,17 @@ def search(
     If `expand_sections` is true, the (possibly reranked) results are expanded with each
     result's section-siblings (see `_expand_sections`) -- the returned list may then be longer
     than `top_k`; this is intended, not a bug.
+
+    `cache` is an injectable `RetrievalCache` (defaulting to `RedisRetrievalCache`); the full
+    result of this function, keyed by (`query`, `top_k`, `rerank`, `expand_sections`), is
+    cache-aside -- a hit returns immediately without running any of the pipeline below.
     """
+    cache = cache or get_default_retrieval_cache()
+    cache_key = _cache_key(query, top_k, rerank, expand_sections)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     settings = settings or get_embedding_settings()
     embedding_client = embedding_client or OllamaEmbeddingClient(settings)
     faiss_index = faiss_index or FaissIndex(settings.faiss_index_path, settings.dimension)
@@ -131,6 +156,7 @@ def search(
 
         fused = _reciprocal_rank_fusion(vector_ranked_ids, bm25_ranked_ids)[:top_k]
         if not fused:
+            cache.set(cache_key, [])
             return []
 
         chunks_by_vector_id = get_chunks_by_vector_ids(session, [vector_id for vector_id, _ in fused])
@@ -160,4 +186,5 @@ def search(
         if expand_sections:
             results = _expand_sections(session, results)
 
+        cache.set(cache_key, results)
         return results

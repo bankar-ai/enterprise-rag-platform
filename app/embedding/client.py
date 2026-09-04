@@ -4,7 +4,7 @@ from typing import Protocol
 
 import ollama
 
-from app.embedding.cache import EmbeddingCache, RedisEmbeddingCache
+from app.embedding.cache import EmbeddingCache, get_default_embedding_cache
 from app.embedding.config import EmbeddingSettings
 
 
@@ -26,11 +26,11 @@ class OllamaEmbeddingClient:
     def __init__(self, settings: EmbeddingSettings, cache: EmbeddingCache | None = None) -> None:
         """Build a client bound to `settings.ollama_host`/`settings.model`, cache-aside via `cache`.
 
-        `cache` defaults to a `RedisEmbeddingCache` built from `settings` when not given.
+        `cache` defaults to the process-wide memoized `RedisEmbeddingCache` when not given.
         """
         self._client = ollama.Client(host=settings.ollama_host)
         self._model = settings.model
-        self._cache: EmbeddingCache = cache if cache is not None else RedisEmbeddingCache(settings)
+        self._cache: EmbeddingCache = cache if cache is not None else get_default_embedding_cache()
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Return one embedding vector per text in `texts`, in the same order.
