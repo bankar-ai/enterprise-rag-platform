@@ -450,6 +450,104 @@ def test_reciprocal_rank_fusion_both_empty_returns_empty_list():
     assert _reciprocal_rank_fusion([], [], k=60) == []
 
 
+class _FakeRetrievalCache:
+    def __init__(self, preset: dict[str, list] | None = None):
+        self.store = dict(preset or {})
+        self.get_calls = []
+        self.set_calls = []
+
+    def get(self, cache_key):
+        self.get_calls.append(cache_key)
+        return self.store.get(cache_key)
+
+    def set(self, cache_key, results):
+        self.set_calls.append((cache_key, results))
+        self.store[cache_key] = results
+
+
+def test_search_returns_cached_result_without_touching_pipeline(tmp_path):
+    cached_results = [
+        RetrievedChunk(
+            chunk_id="cached-0",
+            document_id="doc-cached",
+            text="cached text",
+            section_path=["Intro"],
+            page_start=1,
+            page_end=1,
+            source_filename="doc.pdf",
+            score=1.0,
+        )
+    ]
+    fake_cache = _FakeRetrievalCache()
+    cache_key = service_module._cache_key("cached query", 5, False, False)
+    fake_cache.store[cache_key] = cached_results
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+
+    results = search(
+        query="cached query",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+        cache=fake_cache,
+    )
+
+    assert results == cached_results
+    assert fake_client.calls == []  # embedding client never called on a cache hit
+
+
+def test_search_populates_cache_on_miss(tmp_path):
+    document_id = "doc-cache-miss-test"
+    chunks = [_chunk(document_id, 0)]
+    vectors = [[1.0, 0.0, 0.0, 0.0]]
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    _persist_and_index(document_id, chunks, vectors, faiss_index)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    fake_cache = _FakeRetrievalCache()
+
+    results = search(
+        query="find it",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+        cache=fake_cache,
+    )
+
+    cache_key = service_module._cache_key("find it", 5, False, False)
+    assert fake_cache.get_calls == [cache_key]
+    assert fake_cache.set_calls == [(cache_key, results)]
+
+
+def test_search_caches_empty_result_on_miss(tmp_path):
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    fake_cache = _FakeRetrievalCache()
+
+    results = search(
+        query="anything",
+        top_k=5,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+        cache=fake_cache,
+    )
+
+    cache_key = service_module._cache_key("anything", 5, False, False)
+    assert results == []
+    assert fake_cache.set_calls == [(cache_key, [])]
+
+
+def test_cache_key_differs_by_rerank_and_expand_sections_flags():
+    base = service_module._cache_key("q", 5, False, False)
+    assert service_module._cache_key("q", 5, True, False) != base
+    assert service_module._cache_key("q", 5, False, True) != base
+    assert service_module._cache_key("q", 10, False, False) != base
+
+
 def test_search_raises_when_embedding_client_returns_no_vectors(tmp_path):
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
