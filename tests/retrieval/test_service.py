@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 from app.core.db import get_session_factory
@@ -13,6 +15,16 @@ from app.retrieval.service import (
     _reciprocal_rank_fusion,
     search,
 )
+
+_TEST_OWNER_ID = uuid.uuid4()
+
+
+def _ensure_test_owner(session):
+    from app.auth.models import UserRecord
+
+    if session.get(UserRecord, _TEST_OWNER_ID) is None:
+        session.add(UserRecord(id=_TEST_OWNER_ID, email=f"{_TEST_OWNER_ID}@test", hashed_password="x"))
+        session.flush()
 
 
 class _FakeEmbeddingClient:
@@ -51,10 +63,11 @@ def _chunk(
     )
 
 
-def _persist_and_index(document_id, chunks, vectors, faiss_index):
+def _persist_and_index(document_id, chunks, vectors, faiss_index, owner_id):
     session_factory = get_session_factory()
     with session_factory() as session:
-        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        _ensure_test_owner(session)
+        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks, owner_id)
         session.commit()
         vector_ids = [record.vector_id for record in records]
     faiss_index.add(vector_ids, vectors)
@@ -67,13 +80,14 @@ def test_search_does_not_invoke_reranker_when_rerank_is_false(tmp_path):
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_reranker = _FakeReranker()
     search(
         query="find it",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -89,13 +103,14 @@ def test_search_invokes_injected_reranker_and_uses_its_order_when_rerank_is_true
     chunks = [_chunk(document_id, 0), _chunk(document_id, 1)]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_reranker = _FakeReranker()
     results = search(
         query="find chunk 0",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -117,12 +132,13 @@ def test_search_returns_ranked_chunks(tmp_path):
     chunks = [_chunk(document_id, 0), _chunk(document_id, 1)]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
         query="find chunk 0",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -141,6 +157,7 @@ def test_search_on_empty_index_returns_empty_list(tmp_path):
     results = search(
         query="anything",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -154,12 +171,13 @@ def test_search_top_k_larger_than_available_returns_all(tmp_path):
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
         query="find it",
         top_k=10,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -168,12 +186,12 @@ def test_search_top_k_larger_than_available_returns_all(tmp_path):
     assert len(results) == 1
 
 
-def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, caplog):
+def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, caplog, monkeypatch):
     document_id = "doc-search-test-3"
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    vector_ids = _persist_and_index(document_id, chunks, vectors, faiss_index)
+    vector_ids = _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     # Index a vector_id that was never persisted to Postgres, simulating the two stores
     # having diverged (see ERP-011's "Known Limitations": writes are not atomic).
@@ -181,11 +199,27 @@ def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, ca
     faiss_index.add([orphan_vector_id], [[1.0, 0.0, 0.0, 0.0]])
     faiss_index.save()
 
+    # Finding 1's fix filters FAISS hits down to owner_id's actually-persisted chunks
+    # before fusion, which would also (correctly) exclude this never-persisted orphan
+    # before it reaches the hydration-drop path this test targets. Simulate the orphan
+    # surviving that earlier filter (e.g. a chunk deleted between the filter query and
+    # hydration) so the hydration-time defensive drop+warning still gets exercised.
+    original_filter = service_module.filter_vector_ids_by_owner
+
+    def _filter_but_let_orphan_through(session, vector_ids_arg, owner_id):
+        filtered = original_filter(session, vector_ids_arg, owner_id)
+        if orphan_vector_id in vector_ids_arg:
+            filtered = [*filtered, orphan_vector_id]
+        return filtered
+
+    monkeypatch.setattr(service_module, "filter_vector_ids_by_owner", _filter_but_let_orphan_through)
+
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     with caplog.at_level("WARNING"):
         results = search(
             query="find it",
             top_k=10,
+            owner_id=_TEST_OWNER_ID,
             settings=EmbeddingSettings(dimension=4),
             embedding_client=fake_client,
             faiss_index=faiss_index,
@@ -207,7 +241,8 @@ def test_search_fuses_bm25_hits_when_vector_search_finds_nothing(tmp_path):
 
     session_factory = get_session_factory()
     with session_factory() as session:
-        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        _ensure_test_owner(session)
+        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks, _TEST_OWNER_ID)
         session.commit()
         vector_ids = [record.vector_id for record in records]
 
@@ -215,6 +250,7 @@ def test_search_fuses_bm25_hits_when_vector_search_finds_nothing(tmp_path):
     results = search(
         query="quokkas zorbonium",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -232,7 +268,7 @@ def test_search_requests_oversampled_candidates_from_each_retriever_before_fusio
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     recorded_faiss_k = []
     original_faiss_search = faiss_index.search
@@ -246,9 +282,9 @@ def test_search_requests_oversampled_candidates_from_each_retriever_before_fusio
     recorded_bm25_k = []
     original_bm25_search = service_module.search_chunks_by_text
 
-    def _spy_bm25_search(session, query, k):
+    def _spy_bm25_search(session, query, k, owner_id):
         recorded_bm25_k.append(k)
-        return original_bm25_search(session, query, k)
+        return original_bm25_search(session, query, k, owner_id)
 
     monkeypatch.setattr(service_module, "search_chunks_by_text", _spy_bm25_search)
 
@@ -256,6 +292,7 @@ def test_search_requests_oversampled_candidates_from_each_retriever_before_fusio
     search(
         query="chunk text 0",
         top_k=3,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -276,12 +313,13 @@ def test_search_fuses_overlapping_vector_and_bm25_hits(tmp_path):
     ]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
         query="wombats flarnwood",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -306,7 +344,8 @@ def test_expand_sections_inserts_unseen_sibling_after_anchor_with_anchors_score(
     ]
     session_factory = get_session_factory()
     with session_factory() as session:
-        save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        _ensure_test_owner(session)
+        save_document_and_chunks(session, document_id, "doc.pdf", chunks, _TEST_OWNER_ID)
         session.commit()
 
     anchor = RetrievedChunk(
@@ -335,7 +374,8 @@ def test_expand_sections_does_not_duplicate_an_already_present_chunk():
     ]
     session_factory = get_session_factory()
     with session_factory() as session:
-        save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        _ensure_test_owner(session)
+        save_document_and_chunks(session, document_id, "doc.pdf", chunks, _TEST_OWNER_ID)
         session.commit()
 
     anchors = [
@@ -366,12 +406,13 @@ def test_search_with_expand_sections_true_appends_section_siblings(tmp_path):
     ]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
         query="find chunk 0",
         top_k=1,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -387,12 +428,13 @@ def test_search_with_expand_sections_false_matches_baseline(tmp_path):
     chunks = [_chunk(document_id, 0, section_path=["Chapter 1", "Background"])]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
         query="find chunk 0",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -409,13 +451,14 @@ def test_search_composes_rerank_and_expand_sections(tmp_path):
     ]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_reranker = _FakeReranker()
     results = search(
         query="find chunk 0",
         top_k=1,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -479,7 +522,7 @@ def test_search_returns_cached_result_without_touching_pipeline(tmp_path):
         )
     ]
     fake_cache = _FakeRetrievalCache()
-    cache_key = service_module._cache_key("cached query", 5, False, False)
+    cache_key = service_module._cache_key("cached query", 5, False, False, _TEST_OWNER_ID)
     fake_cache.store[cache_key] = cached_results
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
@@ -488,6 +531,7 @@ def test_search_returns_cached_result_without_touching_pipeline(tmp_path):
     results = search(
         query="cached query",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -503,7 +547,7 @@ def test_search_populates_cache_on_miss(tmp_path):
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_cache = _FakeRetrievalCache()
@@ -511,13 +555,14 @@ def test_search_populates_cache_on_miss(tmp_path):
     results = search(
         query="find it",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
         cache=fake_cache,
     )
 
-    cache_key = service_module._cache_key("find it", 5, False, False)
+    cache_key = service_module._cache_key("find it", 5, False, False, _TEST_OWNER_ID)
     assert fake_cache.get_calls == [cache_key]
     assert fake_cache.set_calls == [(cache_key, results)]
 
@@ -530,22 +575,84 @@ def test_search_caches_empty_result_on_miss(tmp_path):
     results = search(
         query="anything",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,
         cache=fake_cache,
     )
 
-    cache_key = service_module._cache_key("anything", 5, False, False)
+    cache_key = service_module._cache_key("anything", 5, False, False, _TEST_OWNER_ID)
     assert results == []
     assert fake_cache.set_calls == [(cache_key, [])]
 
 
 def test_cache_key_differs_by_rerank_and_expand_sections_flags():
-    base = service_module._cache_key("q", 5, False, False)
-    assert service_module._cache_key("q", 5, True, False) != base
-    assert service_module._cache_key("q", 5, False, True) != base
-    assert service_module._cache_key("q", 10, False, False) != base
+    base = service_module._cache_key("q", 5, False, False, _TEST_OWNER_ID)
+    assert service_module._cache_key("q", 5, True, False, _TEST_OWNER_ID) != base
+    assert service_module._cache_key("q", 5, False, True, _TEST_OWNER_ID) != base
+    assert service_module._cache_key("q", 10, False, False, _TEST_OWNER_ID) != base
+
+
+def test_cache_key_differs_by_owner_id():
+    base = service_module._cache_key("q", 5, False, False, _TEST_OWNER_ID)
+    assert service_module._cache_key("q", 5, False, False, uuid.uuid4()) != base
+
+
+def test_search_filters_foreign_owner_vector_hits_before_truncating_to_top_k(tmp_path):
+    """Regression test for Finding 1 (final whole-branch review).
+
+    Fusion used to truncate to `top_k` using vector IDs from FAISS's owner-blind search,
+    before the owner filter ever ran -- so other users' higher-ranked (by raw vector
+    similarity) documents could consume a caller's `top_k` slots, leaving the caller with
+    fewer results than they own, even zero.
+
+    Three users each ingest a document. Every document's embedding is a real (if imperfect)
+    semantic match for the query, but only ranked *worst* of the three in FAISS's raw
+    (owner-blind) neighbor order for the calling user's document -- the other two owners'
+    documents rank better purely by vector similarity. The query text is deliberately
+    disjoint from every chunk's lexical content, so BM25 finds nothing for anyone and this
+    is a vector-only match. With `top_k=1`, truncation keeps only one winner post-fusion --
+    with the bug, that slot goes to whichever *other* owner's vector_id ranks first in
+    FAISS's raw list (dropped at hydration as a foreign-owner row, per the existing orphan
+    handling), leaving the calling user with 0 results despite owning a real matching
+    document. With the fix, the calling user's own (worse-ranked but real) vector_id is the
+    only candidate that survives to fusion, so it wins the single slot.
+    """
+    from app.auth.models import UserRecord
+
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    owner_ids = [uuid.uuid4() for _ in range(3)]
+    # Best-to-worst raw vector similarity to the query vector [1, 0, 0, 0]; the *last* owner
+    # (worst match) is the one whose isolation we're testing.
+    vectors = [[1.0, 0.0, 0.0, 0.0], [0.99, 0.01, 0.0, 0.0], [0.9, 0.1, 0.0, 0.0]]
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        for owner_id in owner_ids:
+            session.add(UserRecord(id=owner_id, email=f"{owner_id}@test", hashed_password="x"))
+        session.commit()
+
+    for owner_id, vector in zip(owner_ids, vectors, strict=True):
+        document_id = f"doc-isolation-{owner_id}"
+        # Distinctive nonsense words, absent from the query below, so BM25 (full-text) finds
+        # no match for anyone -- this test is isolating the vector-only path.
+        chunks = [_chunk(document_id, 0, text="zqlorp fribbentast wobsedge quennifer")]
+        _persist_and_index(document_id, chunks, [vector], faiss_index, owner_id)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    target_owner = owner_ids[-1]  # the worst-ranked-by-raw-vector-similarity owner
+    results = search(
+        query="completely unrelated query text",
+        top_k=1,
+        owner_id=target_owner,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+    )
+
+    assert len(results) == 1
+    assert results[0].chunk_id == f"doc-isolation-{target_owner}-0"
 
 
 def test_search_raises_when_embedding_client_returns_no_vectors(tmp_path):
@@ -557,6 +664,7 @@ def test_search_raises_when_embedding_client_returns_no_vectors(tmp_path):
         search(
             query="anything",
             top_k=5,
+            owner_id=_TEST_OWNER_ID,
             settings=EmbeddingSettings(dimension=4),
             embedding_client=fake_client,
             faiss_index=faiss_index,

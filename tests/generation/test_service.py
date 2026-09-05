@@ -3,8 +3,29 @@ import uuid
 from app.core.db import get_session_factory
 from app.generation.config import GenerationSettings
 from app.generation.repository import append_message, get_or_create_conversation, get_recent_messages
-from app.generation.service import NO_CONTEXT_ANSWER, generate, generate_stream, get_conversation_history
+from app.generation.service import (
+    NO_CONTEXT_ANSWER,
+    ConversationAccessDeniedError,
+    generate,
+    generate_stream,
+    get_conversation_history,
+)
 from app.retrieval.schemas import RetrievedChunk
+
+_TEST_OWNER_ID = uuid.uuid4()
+_OTHER_OWNER_ID = uuid.uuid4()
+
+
+def _ensure_owner(session, owner_id):
+    from app.auth.models import UserRecord
+
+    if session.get(UserRecord, owner_id) is None:
+        session.add(UserRecord(id=owner_id, email=f"{owner_id}@test", hashed_password="x"))
+        session.flush()
+
+
+def _ensure_test_owner(session):
+    _ensure_owner(session, _TEST_OWNER_ID)
 
 
 def _chunk(chunk_id):
@@ -50,7 +71,7 @@ def test_generate_short_circuits_on_empty_retrieval(monkeypatch):
     monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [])
     fake_llm = _FakeLLMClient("should not be used")
 
-    response = generate("what is X?", top_k=5, llm_client=fake_llm)
+    response = generate("what is X?", top_k=5, owner_id=_TEST_OWNER_ID, llm_client=fake_llm)
 
     assert response.answer == NO_CONTEXT_ANSWER
     assert response.citations == []
@@ -65,6 +86,7 @@ def test_generate_builds_prompt_and_returns_citations(monkeypatch):
     response = generate(
         "what is X?",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         rerank=True,
         expand_sections=False,
         settings=GenerationSettings(),
@@ -82,26 +104,31 @@ def test_generate_builds_prompt_and_returns_citations(monkeypatch):
 def test_generate_passes_retrieval_params_through(monkeypatch):
     captured = {}
 
-    def _fake_search(query, top_k, rerank=False, expand_sections=False):
-        captured["args"] = (query, top_k, rerank, expand_sections)
+    def _fake_search(query, top_k, owner_id, rerank=False, expand_sections=False):
+        captured["args"] = (query, top_k, owner_id, rerank, expand_sections)
         return [_chunk("c1")]
 
     monkeypatch.setattr("app.generation.service.retrieval_search", _fake_search)
     fake_llm = _FakeLLMClient("answer")
 
-    generate("q", top_k=7, rerank=True, expand_sections=True, llm_client=fake_llm)
+    generate("q", top_k=7, owner_id=_TEST_OWNER_ID, rerank=True, expand_sections=True, llm_client=fake_llm)
 
-    assert captured["args"] == ("q", 7, True, True)
+    assert captured["args"] == ("q", 7, _TEST_OWNER_ID, True, True)
 
 
 def test_generate_with_new_conversation_id_creates_conversation_and_persists_turns(monkeypatch):
     conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
     chunks = [_chunk("c1")]
     monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: chunks)
     fake_llm = _FakeLLMClient("the answer [1]")
 
     response = generate(
-        "what is X?", top_k=5, conversation_id=conversation_id, llm_client=fake_llm
+        "what is X?", top_k=5, owner_id=_TEST_OWNER_ID, conversation_id=conversation_id, llm_client=fake_llm
     )
 
     assert response.conversation_id == conversation_id
@@ -117,6 +144,11 @@ def test_generate_with_new_conversation_id_creates_conversation_and_persists_tur
 
 def test_generate_first_turn_of_conversation_does_not_call_rewrite(monkeypatch):
     conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
     monkeypatch.setattr(
         "app.generation.service.retrieval_search", lambda *a, **k: [_chunk("c1")]
     )
@@ -127,7 +159,9 @@ def test_generate_first_turn_of_conversation_does_not_call_rewrite(monkeypatch):
     )
     fake_llm = _FakeLLMClient("answer")
 
-    generate("what is X?", top_k=5, conversation_id=conversation_id, llm_client=fake_llm)
+    generate(
+        "what is X?", top_k=5, owner_id=_TEST_OWNER_ID, conversation_id=conversation_id, llm_client=fake_llm
+    )
 
     assert rewrite_calls == []
 
@@ -136,7 +170,8 @@ def test_generate_second_turn_rewrites_query_using_history(monkeypatch):
     conversation_id = uuid.uuid4()
     session_factory = get_session_factory()
     with session_factory() as session:
-        get_or_create_conversation(session, conversation_id)
+        _ensure_test_owner(session)
+        get_or_create_conversation(session, conversation_id, _TEST_OWNER_ID)
         from app.generation.repository import append_message
 
         append_message(session, conversation_id, "user", "what is the deployment process?")
@@ -145,7 +180,7 @@ def test_generate_second_turn_rewrites_query_using_history(monkeypatch):
 
     captured_retrieval_query = {}
 
-    def _fake_search(query, top_k, rerank=False, expand_sections=False):
+    def _fake_search(query, top_k, owner_id, rerank=False, expand_sections=False):
         captured_retrieval_query["query"] = query
         return [_chunk("c1")]
 
@@ -159,6 +194,7 @@ def test_generate_second_turn_rewrites_query_using_history(monkeypatch):
     response = generate(
         "what about the second one?",
         top_k=5,
+        owner_id=_TEST_OWNER_ID,
         conversation_id=conversation_id,
         llm_client=fake_llm,
     )
@@ -180,7 +216,8 @@ def test_generate_conversation_rewrite_failure_propagates_and_commits_nothing(mo
     conversation_id = uuid.uuid4()
     session_factory = get_session_factory()
     with session_factory() as session:
-        get_or_create_conversation(session, conversation_id)
+        _ensure_test_owner(session)
+        get_or_create_conversation(session, conversation_id, _TEST_OWNER_ID)
         from app.generation.repository import append_message
 
         append_message(session, conversation_id, "user", "first question")
@@ -199,7 +236,11 @@ def test_generate_conversation_rewrite_failure_propagates_and_commits_nothing(mo
 
     try:
         generate(
-            "a follow-up", top_k=5, conversation_id=conversation_id, llm_client=fake_llm
+            "a follow-up",
+            top_k=5,
+            owner_id=_TEST_OWNER_ID,
+            conversation_id=conversation_id,
+            llm_client=fake_llm,
         )
         raise AssertionError("expected RuntimeError to propagate")
     except RuntimeError as exc:
@@ -212,11 +253,20 @@ def test_generate_conversation_rewrite_failure_propagates_and_commits_nothing(mo
 
 def test_generate_conversation_short_circuit_still_persists_turns(monkeypatch):
     conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
     monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [])
     fake_llm = _FakeLLMClient("should not be used")
 
     response = generate(
-        "unanswerable question", top_k=5, conversation_id=conversation_id, llm_client=fake_llm
+        "unanswerable question",
+        top_k=5,
+        owner_id=_TEST_OWNER_ID,
+        conversation_id=conversation_id,
+        llm_client=fake_llm,
     )
 
     assert response.answer == NO_CONTEXT_ANSWER
@@ -229,20 +279,54 @@ def test_generate_conversation_short_circuit_still_persists_turns(monkeypatch):
     assert messages[1].content == NO_CONTEXT_ANSWER
 
 
+def test_generate_raises_access_denied_for_other_owners_conversation(monkeypatch):
+    conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_owner(session, _OTHER_OWNER_ID)
+        get_or_create_conversation(session, conversation_id, _OTHER_OWNER_ID)
+        session.commit()
+
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
+    def _fail_search(*a, **k):
+        raise AssertionError("retrieval should not run when access is denied")
+
+    monkeypatch.setattr("app.generation.service.retrieval_search", _fail_search)
+    fake_llm = _FakeLLMClient("should not be used")
+
+    try:
+        generate(
+            "what is X?",
+            top_k=5,
+            owner_id=_TEST_OWNER_ID,
+            conversation_id=conversation_id,
+            llm_client=fake_llm,
+        )
+        raise AssertionError("expected ConversationAccessDeniedError")
+    except ConversationAccessDeniedError:
+        pass
+
+    assert fake_llm.calls == []
+
+
 def test_get_conversation_history_returns_none_for_unknown_id():
-    assert get_conversation_history(uuid.uuid4()) is None
+    assert get_conversation_history(uuid.uuid4(), _TEST_OWNER_ID) is None
 
 
 def test_get_conversation_history_returns_all_messages_oldest_first():
     conversation_id = uuid.uuid4()
     session_factory = get_session_factory()
     with session_factory() as session:
-        get_or_create_conversation(session, conversation_id)
+        _ensure_test_owner(session)
+        get_or_create_conversation(session, conversation_id, _TEST_OWNER_ID)
         append_message(session, conversation_id, "user", "first")
         append_message(session, conversation_id, "assistant", "second")
         session.commit()
 
-    history = get_conversation_history(conversation_id)
+    history = get_conversation_history(conversation_id, _TEST_OWNER_ID)
 
     assert history is not None
     assert history.conversation_id == conversation_id
@@ -255,7 +339,7 @@ def test_generate_stream_stateless_yields_citations_then_tokens_then_done(monkey
     monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: chunks)
     fake_llm = _FakeStreamingLLMClient(["Hello", " world"])
 
-    events = list(generate_stream("what is X?", top_k=5, llm_client=fake_llm))
+    events = list(generate_stream("what is X?", top_k=5, owner_id=_TEST_OWNER_ID, llm_client=fake_llm))
 
     assert events == [
         (
@@ -291,7 +375,7 @@ def test_generate_stream_stateless_short_circuits_on_empty_retrieval(monkeypatch
     monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [])
     fake_llm = _FakeStreamingLLMClient(["should not be used"])
 
-    events = list(generate_stream("what is X?", top_k=5, llm_client=fake_llm))
+    events = list(generate_stream("what is X?", top_k=5, owner_id=_TEST_OWNER_ID, llm_client=fake_llm))
 
     assert events == [
         ("citations", {"citations": []}),
@@ -303,11 +387,22 @@ def test_generate_stream_stateless_short_circuits_on_empty_retrieval(monkeypatch
 
 def test_generate_stream_with_conversation_id_persists_after_done(monkeypatch):
     conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
     monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [_chunk("c1")])
     fake_llm = _FakeStreamingLLMClient(["the ", "answer"])
 
     events = list(
-        generate_stream("what is X?", top_k=5, conversation_id=conversation_id, llm_client=fake_llm)
+        generate_stream(
+            "what is X?",
+            top_k=5,
+            owner_id=_TEST_OWNER_ID,
+            conversation_id=conversation_id,
+            llm_client=fake_llm,
+        )
     )
 
     assert events[-1] == ("done", {"conversation_id": str(conversation_id)})
@@ -323,14 +418,15 @@ def test_generate_stream_second_turn_rewrites_query_using_history(monkeypatch):
     conversation_id = uuid.uuid4()
     session_factory = get_session_factory()
     with session_factory() as session:
-        get_or_create_conversation(session, conversation_id)
+        _ensure_test_owner(session)
+        get_or_create_conversation(session, conversation_id, _TEST_OWNER_ID)
         append_message(session, conversation_id, "user", "what is the deployment process?")
         append_message(session, conversation_id, "assistant", "it has three steps.")
         session.commit()
 
     captured_retrieval_query = {}
 
-    def _fake_search(query, top_k, rerank=False, expand_sections=False):
+    def _fake_search(query, top_k, owner_id, rerank=False, expand_sections=False):
         captured_retrieval_query["query"] = query
         return [_chunk("c1")]
 
@@ -342,7 +438,11 @@ def test_generate_stream_second_turn_rewrites_query_using_history(monkeypatch):
 
     events = list(
         generate_stream(
-            "what about the second one?", top_k=5, conversation_id=conversation_id, llm_client=fake_llm
+            "what about the second one?",
+            top_k=5,
+            owner_id=_TEST_OWNER_ID,
+            conversation_id=conversation_id,
+            llm_client=fake_llm,
         )
     )
 
@@ -365,7 +465,11 @@ def test_generate_stream_exception_mid_stream_yields_error_and_persists_nothing(
 
     events = list(
         generate_stream(
-            "what is X?", top_k=5, conversation_id=conversation_id, llm_client=_RaisingLLMClient()
+            "what is X?",
+            top_k=5,
+            owner_id=_TEST_OWNER_ID,
+            conversation_id=conversation_id,
+            llm_client=_RaisingLLMClient(),
         )
     )
 

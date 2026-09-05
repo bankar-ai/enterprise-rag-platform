@@ -1,9 +1,21 @@
+import uuid
+
 from app.core.db import get_session_factory
 from app.embedding.config import EmbeddingSettings
 from app.embedding.index import FaissIndex
 from app.embedding.service import embed_and_persist
 from app.ingestion.models import ChunkRecord
 from app.ingestion.schemas import Chunk
+
+_TEST_OWNER_ID = uuid.uuid4()
+
+
+def _ensure_test_owner(session):
+    from app.auth.models import UserRecord
+
+    if session.get(UserRecord, _TEST_OWNER_ID) is None:
+        session.add(UserRecord(id=_TEST_OWNER_ID, email=f"{_TEST_OWNER_ID}@test", hashed_password="x"))
+        session.flush()
 
 
 class _FakeEmbeddingClient:
@@ -38,10 +50,16 @@ def test_embed_and_persist_writes_to_postgres_and_faiss(tmp_path):
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
     settings = EmbeddingSettings(dimension=4)
 
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
     embed_and_persist(
         document_id=document_id,
         source_filename="doc.pdf",
         chunks=chunks,
+        owner_id=_TEST_OWNER_ID,
         settings=settings,
         embedding_client=fake_client,
         faiss_index=faiss_index,
@@ -69,6 +87,7 @@ def test_embed_and_persist_noop_for_empty_chunks(tmp_path):
         document_id="doc-empty",
         source_filename="doc.pdf",
         chunks=[],
+        owner_id=_TEST_OWNER_ID,
         settings=EmbeddingSettings(dimension=4),
         embedding_client=fake_client,
         faiss_index=faiss_index,

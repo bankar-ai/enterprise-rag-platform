@@ -1,9 +1,10 @@
 """SQLAlchemy ORM models for persisted documents and chunks."""
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import DDL, JSON, ForeignKey, Identity, Index, Text, event
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -19,6 +20,7 @@ class DocumentRecord(Base):
 
     document_id: Mapped[str] = mapped_column(primary_key=True)
     filename: Mapped[str]
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 

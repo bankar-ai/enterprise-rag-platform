@@ -4,40 +4,46 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from tests.auth_helpers import register_and_login
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def auth_headers():
+    return register_and_login(client, "generation")
 
 
 @pytest.fixture(autouse=True)
 def _stub_generation_backend(monkeypatch):
     """Stub retrieval and the LLM client so no real Ollama/Postgres call is made."""
 
-    def _fake_search(query, top_k, rerank=False, expand_sections=False):
+    def _fake_search(query, top_k, owner_id, rerank=False, expand_sections=False):
         return []
 
     monkeypatch.setattr("app.generation.service.retrieval_search", _fake_search)
     yield
 
 
-def test_query_returns_no_context_answer_when_retrieval_empty():
-    response = client.post("/generation/query", json={"query": "anything"})
+def test_query_returns_no_context_answer_when_retrieval_empty(auth_headers):
+    response = client.post("/generation/query", json={"query": "anything"}, headers=auth_headers)
     assert response.status_code == 200
     body = response.json()
     assert body["citations"] == []
     assert "don't have enough information" in body["answer"]
 
 
-def test_query_rejects_empty_query_string():
-    response = client.post("/generation/query", json={"query": ""})
+def test_query_rejects_empty_query_string(auth_headers):
+    response = client.post("/generation/query", json={"query": ""}, headers=auth_headers)
     assert response.status_code == 422
 
 
-def test_query_rejects_top_k_out_of_bounds():
-    response = client.post("/generation/query", json={"query": "x", "top_k": 0})
+def test_query_rejects_top_k_out_of_bounds(auth_headers):
+    response = client.post("/generation/query", json={"query": "x", "top_k": 0}, headers=auth_headers)
     assert response.status_code == 422
 
 
-def test_query_returns_answer_with_citations(monkeypatch):
+def test_query_returns_answer_with_citations(monkeypatch, auth_headers):
     from app.retrieval.schemas import RetrievedChunk
 
     chunk = RetrievedChunk(
@@ -60,7 +66,7 @@ def test_query_returns_answer_with_citations(monkeypatch):
         OllamaLLMClient, "generate", lambda self, system_prompt, user_prompt: "the answer [1]"
     )
 
-    response = client.post("/generation/query", json={"query": "what is X?"})
+    response = client.post("/generation/query", json={"query": "what is X?"}, headers=auth_headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -77,7 +83,7 @@ def test_query_returns_answer_with_citations(monkeypatch):
     ]
 
 
-def test_query_returns_503_when_llm_backend_unavailable(monkeypatch):
+def test_query_returns_503_when_llm_backend_unavailable(monkeypatch, auth_headers):
     from app.retrieval.schemas import RetrievedChunk
 
     chunk = RetrievedChunk(
@@ -101,19 +107,19 @@ def test_query_returns_503_when_llm_backend_unavailable(monkeypatch):
 
     monkeypatch.setattr(OllamaLLMClient, "generate", _raise_generate)
 
-    response = client.post("/generation/query", json={"query": "what is X?"})
+    response = client.post("/generation/query", json={"query": "what is X?"}, headers=auth_headers)
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Generation query failed"}
 
 
-def test_query_omitted_conversation_id_returns_null_conversation_id():
-    response = client.post("/generation/query", json={"query": "anything"})
+def test_query_omitted_conversation_id_returns_null_conversation_id(auth_headers):
+    response = client.post("/generation/query", json={"query": "anything"}, headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["conversation_id"] is None
 
 
-def test_query_with_conversation_id_continues_across_two_calls(monkeypatch):
+def test_query_with_conversation_id_continues_across_two_calls(monkeypatch, auth_headers):
     import uuid
 
     from app.retrieval.schemas import RetrievedChunk
@@ -131,7 +137,7 @@ def test_query_with_conversation_id_continues_across_two_calls(monkeypatch):
     )
     retrieval_queries = []
 
-    def _fake_search(query, top_k, rerank=False, expand_sections=False):
+    def _fake_search(query, top_k, owner_id, rerank=False, expand_sections=False):
         retrieval_queries.append(query)
         return [chunk]
 
@@ -152,6 +158,7 @@ def test_query_with_conversation_id_continues_across_two_calls(monkeypatch):
     first = client.post(
         "/generation/query",
         json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+        headers=auth_headers,
     )
     assert first.status_code == 200
     assert first.json()["conversation_id"] == conversation_id
@@ -159,6 +166,7 @@ def test_query_with_conversation_id_continues_across_two_calls(monkeypatch):
     second = client.post(
         "/generation/query",
         json={"query": "what about the second one?", "conversation_id": conversation_id},
+        headers=auth_headers,
     )
     assert second.status_code == 200
     assert second.json()["conversation_id"] == conversation_id
@@ -167,14 +175,14 @@ def test_query_with_conversation_id_continues_across_two_calls(monkeypatch):
     assert retrieval_queries[1] != "what about the second one?"
 
 
-def test_get_conversation_returns_404_for_unknown_id():
+def test_get_conversation_returns_404_for_unknown_id(auth_headers):
     import uuid
 
-    response = client.get(f"/conversations/{uuid.uuid4()}")
+    response = client.get(f"/conversations/{uuid.uuid4()}", headers=auth_headers)
     assert response.status_code == 404
 
 
-def test_get_conversation_returns_history_ordered_oldest_first(monkeypatch):
+def test_get_conversation_returns_history_ordered_oldest_first(monkeypatch, auth_headers):
     import uuid
 
     from app.generation.client import OllamaLLMClient
@@ -201,10 +209,11 @@ def test_get_conversation_returns_history_ordered_oldest_first(monkeypatch):
     create_response = client.post(
         "/generation/query",
         json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+        headers=auth_headers,
     )
     assert create_response.status_code == 200
 
-    response = client.get(f"/conversations/{conversation_id}")
+    response = client.get(f"/conversations/{conversation_id}", headers=auth_headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -212,6 +221,88 @@ def test_get_conversation_returns_history_ordered_oldest_first(monkeypatch):
     assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
     assert body["messages"][0]["content"] == "what is the deployment process?"
     assert body["messages"][1]["content"] == "the answer"
+
+
+def test_query_returns_404_when_conversation_id_belongs_to_another_user(monkeypatch):
+    import uuid
+
+    from app.retrieval.schemas import RetrievedChunk
+
+    conversation_id = str(uuid.uuid4())
+    chunk = RetrievedChunk(
+        chunk_id="c1",
+        document_id="doc-1",
+        text="some text",
+        section_path=["Intro"],
+        page_start=1,
+        page_end=1,
+        source_filename="doc.pdf",
+        score=0.9,
+    )
+    monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [chunk])
+
+    from app.generation.client import OllamaLLMClient
+
+    monkeypatch.setattr(
+        OllamaLLMClient, "generate", lambda self, system_prompt, user_prompt: "the answer"
+    )
+
+    headers_a = register_and_login(client, "generation-owner-a")
+    headers_b = register_and_login(client, "generation-owner-b")
+
+    create_response = client.post(
+        "/generation/query",
+        json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+        headers=headers_a,
+    )
+    assert create_response.status_code == 200
+
+    response = client.post(
+        "/generation/query",
+        json={"query": "what about the second one?", "conversation_id": conversation_id},
+        headers=headers_b,
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_conversation_returns_404_when_conversation_belongs_to_another_user(monkeypatch):
+    import uuid
+
+    from app.retrieval.schemas import RetrievedChunk
+
+    conversation_id = str(uuid.uuid4())
+    chunk = RetrievedChunk(
+        chunk_id="c1",
+        document_id="doc-1",
+        text="some text",
+        section_path=["Intro"],
+        page_start=1,
+        page_end=1,
+        source_filename="doc.pdf",
+        score=0.9,
+    )
+    monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [chunk])
+
+    from app.generation.client import OllamaLLMClient
+
+    monkeypatch.setattr(
+        OllamaLLMClient, "generate", lambda self, system_prompt, user_prompt: "the answer"
+    )
+
+    headers_a = register_and_login(client, "generation-history-owner-a")
+    headers_b = register_and_login(client, "generation-history-owner-b")
+
+    create_response = client.post(
+        "/generation/query",
+        json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+        headers=headers_a,
+    )
+    assert create_response.status_code == 200
+
+    response = client.get(f"/conversations/{conversation_id}", headers=headers_b)
+
+    assert response.status_code == 404
 
 
 def _parse_sse(text: str) -> list[tuple[str, dict]]:
@@ -226,10 +317,12 @@ def _parse_sse(text: str) -> list[tuple[str, dict]]:
     return events
 
 
-def test_query_stream_returns_no_context_sse_when_retrieval_empty():
+def test_query_stream_returns_no_context_sse_when_retrieval_empty(auth_headers):
     from app.generation.service import NO_CONTEXT_ANSWER
 
-    response = client.post("/generation/query/stream", json={"query": "anything"})
+    response = client.post(
+        "/generation/query/stream", json={"query": "anything"}, headers=auth_headers
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -243,7 +336,7 @@ def test_query_stream_returns_no_context_sse_when_retrieval_empty():
     ]
 
 
-def test_query_stream_returns_citations_tokens_and_done(monkeypatch):
+def test_query_stream_returns_citations_tokens_and_done(monkeypatch, auth_headers):
     from app.retrieval.schemas import RetrievedChunk
 
     chunk = RetrievedChunk(
@@ -266,7 +359,9 @@ def test_query_stream_returns_citations_tokens_and_done(monkeypatch):
 
     monkeypatch.setattr(OllamaLLMClient, "generate_stream", _fake_generate_stream)
 
-    response = client.post("/generation/query/stream", json={"query": "what is X?"})
+    response = client.post(
+        "/generation/query/stream", json={"query": "what is X?"}, headers=auth_headers
+    )
 
     assert response.status_code == 200
     events = _parse_sse(response.text)
@@ -290,7 +385,7 @@ def test_query_stream_returns_citations_tokens_and_done(monkeypatch):
     assert events[3] == ("done", {"conversation_id": None})
 
 
-def test_query_stream_yields_error_event_on_llm_failure(monkeypatch):
+def test_query_stream_yields_error_event_on_llm_failure(monkeypatch, auth_headers):
     from app.retrieval.schemas import RetrievedChunk
 
     chunk = RetrievedChunk(
@@ -313,14 +408,16 @@ def test_query_stream_yields_error_event_on_llm_failure(monkeypatch):
 
     monkeypatch.setattr(OllamaLLMClient, "generate_stream", _raise_generate_stream)
 
-    response = client.post("/generation/query/stream", json={"query": "what is X?"})
+    response = client.post(
+        "/generation/query/stream", json={"query": "what is X?"}, headers=auth_headers
+    )
 
     assert response.status_code == 200
     events = _parse_sse(response.text)
     assert events[-1] == ("error", {"detail": "Generation query failed"})
 
 
-def test_query_stream_with_conversation_id_continues_across_two_calls(monkeypatch):
+def test_query_stream_with_conversation_id_continues_across_two_calls(monkeypatch, auth_headers):
     import uuid
 
     from app.retrieval.schemas import RetrievedChunk
@@ -338,7 +435,7 @@ def test_query_stream_with_conversation_id_continues_across_two_calls(monkeypatc
     )
     retrieval_queries = []
 
-    def _fake_search(query, top_k, rerank=False, expand_sections=False):
+    def _fake_search(query, top_k, owner_id, rerank=False, expand_sections=False):
         retrieval_queries.append(query)
         return [chunk]
 
@@ -361,6 +458,7 @@ def test_query_stream_with_conversation_id_continues_across_two_calls(monkeypatc
     first = client.post(
         "/generation/query/stream",
         json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+        headers=auth_headers,
     )
     assert first.status_code == 200
     assert _parse_sse(first.text)[-1] == ("done", {"conversation_id": conversation_id})
@@ -368,6 +466,7 @@ def test_query_stream_with_conversation_id_continues_across_two_calls(monkeypatc
     second = client.post(
         "/generation/query/stream",
         json={"query": "what about the second one?", "conversation_id": conversation_id},
+        headers=auth_headers,
     )
     assert second.status_code == 200
     assert _parse_sse(second.text)[-1] == ("done", {"conversation_id": conversation_id})
