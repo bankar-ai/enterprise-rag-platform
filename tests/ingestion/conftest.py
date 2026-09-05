@@ -1,6 +1,10 @@
 # tests/ingestion/conftest.py
-import fitz
-import pytest
+import os
+
+os.environ.setdefault("AUTH_JWT_SECRET_KEY", "test-only-secret-do-not-use-in-production")
+
+import fitz  # noqa: E402
+import pytest  # noqa: E402
 
 
 @pytest.fixture

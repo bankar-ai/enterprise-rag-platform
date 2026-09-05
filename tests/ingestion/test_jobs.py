@@ -1,10 +1,22 @@
 # tests/ingestion/test_jobs.py
+import uuid
+
 from app.core.db import get_session_factory
 from app.embedding.index import FaissIndex
 from app.ingestion.config import IngestionSettings
 from app.ingestion.jobs import create_job, get_job, run_ingestion_job
 from app.ingestion.models import ChunkRecord
 from app.ingestion.schemas import JobStatus
+
+_TEST_OWNER_ID = uuid.uuid4()
+
+
+def _ensure_test_owner(session):
+    from app.auth.models import UserRecord
+
+    if session.get(UserRecord, _TEST_OWNER_ID) is None:
+        session.add(UserRecord(id=_TEST_OWNER_ID, email=f"{_TEST_OWNER_ID}@test", hashed_password="x"))
+        session.flush()
 
 
 def _settings():
@@ -17,7 +29,7 @@ class _FakeEmbeddingClient:
 
 
 def test_create_job_starts_pending():
-    job_id = create_job()
+    job_id = create_job(_TEST_OWNER_ID)
     record = get_job(job_id)
     assert record.status == JobStatus.PENDING
     assert record.result is None
@@ -29,12 +41,18 @@ def test_get_job_returns_none_for_unknown_id():
 
 
 def test_run_ingestion_job_marks_done_on_success(simple_text_pdf, tmp_path):
-    job_id = create_job()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
+    job_id = create_job(_TEST_OWNER_ID)
     run_ingestion_job(
         job_id,
         simple_text_pdf,
         "simple.pdf",
         _settings(),
+        _TEST_OWNER_ID,
         embedding_client=_FakeEmbeddingClient(),
         faiss_index=FaissIndex(str(tmp_path / "index.bin"), dimension=4),
     )
@@ -46,8 +64,8 @@ def test_run_ingestion_job_marks_done_on_success(simple_text_pdf, tmp_path):
 
 
 def test_run_ingestion_job_marks_failed_on_bad_path():
-    job_id = create_job()
-    run_ingestion_job(job_id, "/no/such/file.pdf", "missing.pdf", _settings())
+    job_id = create_job(_TEST_OWNER_ID)
+    run_ingestion_job(job_id, "/no/such/file.pdf", "missing.pdf", _settings(), _TEST_OWNER_ID)
 
     record = get_job(job_id)
     assert record.status == JobStatus.FAILED
@@ -56,16 +74,21 @@ def test_run_ingestion_job_marks_failed_on_bad_path():
 
 
 def test_run_ingestion_job_logs_on_failure(caplog):
-    job_id = create_job()
+    job_id = create_job(_TEST_OWNER_ID)
     with caplog.at_level("ERROR"):
-        run_ingestion_job(job_id, "/no/such/file.pdf", "missing.pdf", _settings())
+        run_ingestion_job(job_id, "/no/such/file.pdf", "missing.pdf", _settings(), _TEST_OWNER_ID)
 
     assert any(job_id in record.message for record in caplog.records)
     assert any(record.levelname == "ERROR" for record in caplog.records)
 
 
 def test_run_ingestion_job_persists_chunks_and_vectors(simple_text_pdf, tmp_path):
-    job_id = create_job()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
+    job_id = create_job(_TEST_OWNER_ID)
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
 
     run_ingestion_job(
@@ -73,6 +96,7 @@ def test_run_ingestion_job_persists_chunks_and_vectors(simple_text_pdf, tmp_path
         simple_text_pdf,
         "simple.pdf",
         _settings(),
+        _TEST_OWNER_ID,
         embedding_client=_FakeEmbeddingClient(),
         faiss_index=faiss_index,
     )
@@ -94,12 +118,13 @@ def test_run_ingestion_job_marks_failed_if_persistence_fails(simple_text_pdf, tm
         def embed(self, texts):
             raise RuntimeError("embedding backend unreachable")
 
-    job_id = create_job()
+    job_id = create_job(_TEST_OWNER_ID)
     run_ingestion_job(
         job_id,
         simple_text_pdf,
         "simple.pdf",
         _settings(),
+        _TEST_OWNER_ID,
         embedding_client=_BrokenEmbeddingClient(),
         faiss_index=FaissIndex(str(tmp_path / "index.bin"), dimension=4),
     )

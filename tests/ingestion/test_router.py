@@ -1,6 +1,7 @@
 # tests/ingestion/test_router.py
 import io
 import time
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +13,15 @@ from app.main import app
 
 client = TestClient(app)
 _PDF_MAGIC = b"%PDF-"
+
+
+@pytest.fixture
+def auth_headers():
+    email = f"ingestion-test-{uuid.uuid4()}@example.com"
+    client.post("/auth/register", json={"email": email, "password": "a-long-enough-password"})
+    login_response = client.post("/auth/login", json={"email": email, "password": "a-long-enough-password"})
+    token = login_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(autouse=True)
@@ -43,10 +53,10 @@ def _read_fixture_bytes(path: str) -> bytes:
         return f.read()
 
 
-def _poll_until_done(job_id: str, timeout_seconds: float = 60.0) -> dict:
+def _poll_until_done(job_id: str, auth_headers: dict, timeout_seconds: float = 60.0) -> dict:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        response = client.get(f"/ingestion/jobs/{job_id}")
+        response = client.get(f"/ingestion/jobs/{job_id}", headers=auth_headers)
         assert response.status_code == 200
         body = response.json()
         if body["status"] in ("done", "failed"):
@@ -55,23 +65,25 @@ def _poll_until_done(job_id: str, timeout_seconds: float = 60.0) -> dict:
     raise TimeoutError(f"job {job_id} did not finish within {timeout_seconds}s")
 
 
-def test_upload_pdf_rejects_non_pdf_content_type():
+def test_upload_pdf_rejects_non_pdf_content_type(auth_headers):
     response = client.post(
         "/ingestion/pdf",
         files={"file": ("notes.txt", io.BytesIO(b"just text"), "text/plain")},
+        headers=auth_headers,
     )
     assert response.status_code == 400
 
 
-def test_upload_pdf_rejects_file_without_pdf_header():
+def test_upload_pdf_rejects_file_without_pdf_header(auth_headers):
     response = client.post(
         "/ingestion/pdf",
         files={"file": ("fake.pdf", io.BytesIO(b"not really a pdf"), "application/pdf")},
+        headers=auth_headers,
     )
     assert response.status_code == 400
 
 
-def test_upload_pdf_rejects_missing_filename():
+def test_upload_pdf_rejects_missing_filename(auth_headers):
     # httpx's `files=` shorthand drops the `filename` param entirely when it's empty,
     # which makes the part look like a plain form field and 422s before reaching our
     # code. A raw multipart body with an explicit empty `filename=""` is required to
@@ -87,27 +99,28 @@ def test_upload_pdf_rejects_missing_filename():
     response = client.post(
         "/ingestion/pdf",
         content=body,
-        headers={"Content-Type": "multipart/form-data; boundary=boundary"},
+        headers={**auth_headers, "Content-Type": "multipart/form-data; boundary=boundary"},
     )
     assert response.status_code == 400
 
 
-def test_upload_and_poll_simple_pdf(simple_text_pdf):
+def test_upload_and_poll_simple_pdf(simple_text_pdf, auth_headers):
     pdf_bytes = _read_fixture_bytes(simple_text_pdf)
     response = client.post(
         "/ingestion/pdf",
         files={"file": ("simple.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        headers=auth_headers,
     )
     assert response.status_code == 202
     job_id = response.json()["job_id"]
 
-    final = _poll_until_done(job_id)
+    final = _poll_until_done(job_id, auth_headers)
     assert final["status"] == "done"
     assert final["result"]["chunks"]
     assert final["result"]["chunks"][0]["source_filename"] == "simple.pdf"
 
 
-def test_upload_and_poll_multi_paragraph_pdf(multi_paragraph_pdf):
+def test_upload_and_poll_multi_paragraph_pdf(multi_paragraph_pdf, auth_headers):
     # End-to-end regression test for a Critical whole-branch-review finding: every existing
     # fixture used single-line sections, which accidentally masked a chunker bug where
     # MarkdownHeaderTextSplitter's reconstructed (whitespace-normalized) section.page_content
@@ -118,11 +131,12 @@ def test_upload_and_poll_multi_paragraph_pdf(multi_paragraph_pdf):
     response = client.post(
         "/ingestion/pdf",
         files={"file": ("multi_paragraph.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        headers=auth_headers,
     )
     assert response.status_code == 202
     job_id = response.json()["job_id"]
 
-    final = _poll_until_done(job_id)
+    final = _poll_until_done(job_id, auth_headers)
     assert final["status"] == "done"
     chunks = final["result"]["chunks"]
     assert chunks
@@ -140,12 +154,12 @@ def test_upload_and_poll_multi_paragraph_pdf(multi_paragraph_pdf):
         assert "  \n" not in chunk["text"]
 
 
-def test_get_job_status_404_for_unknown_job():
-    response = client.get("/ingestion/jobs/does-not-exist")
+def test_get_job_status_404_for_unknown_job(auth_headers):
+    response = client.get("/ingestion/jobs/does-not-exist", headers=auth_headers)
     assert response.status_code == 404
 
 
-def test_upload_pdf_rejects_oversized_file(monkeypatch):
+def test_upload_pdf_rejects_oversized_file(monkeypatch, auth_headers):
     # Finding 3 (final whole-branch review): the upload endpoint streamed uploads of
     # unbounded size to a temp file with no size check — a resource-exhaustion risk.
     # A tiny configured limit lets this test exercise the guard without a huge fixture.
@@ -156,6 +170,7 @@ def test_upload_pdf_rejects_oversized_file(monkeypatch):
         response = client.post(
             "/ingestion/pdf",
             files={"file": ("big.pdf", io.BytesIO(oversized_body), "application/pdf")},
+            headers=auth_headers,
         )
         assert response.status_code == 413
     finally:

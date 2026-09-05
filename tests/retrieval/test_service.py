@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 from app.core.db import get_session_factory
@@ -13,6 +15,16 @@ from app.retrieval.service import (
     _reciprocal_rank_fusion,
     search,
 )
+
+_TEST_OWNER_ID = uuid.uuid4()
+
+
+def _ensure_test_owner(session):
+    from app.auth.models import UserRecord
+
+    if session.get(UserRecord, _TEST_OWNER_ID) is None:
+        session.add(UserRecord(id=_TEST_OWNER_ID, email=f"{_TEST_OWNER_ID}@test", hashed_password="x"))
+        session.flush()
 
 
 class _FakeEmbeddingClient:
@@ -51,10 +63,11 @@ def _chunk(
     )
 
 
-def _persist_and_index(document_id, chunks, vectors, faiss_index):
+def _persist_and_index(document_id, chunks, vectors, faiss_index, owner_id):
     session_factory = get_session_factory()
     with session_factory() as session:
-        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks)
+        _ensure_test_owner(session)
+        records = save_document_and_chunks(session, document_id, "doc.pdf", chunks, owner_id)
         session.commit()
         vector_ids = [record.vector_id for record in records]
     faiss_index.add(vector_ids, vectors)
@@ -67,7 +80,7 @@ def test_search_does_not_invoke_reranker_when_rerank_is_false(tmp_path):
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_reranker = _FakeReranker()
@@ -89,7 +102,7 @@ def test_search_invokes_injected_reranker_and_uses_its_order_when_rerank_is_true
     chunks = [_chunk(document_id, 0), _chunk(document_id, 1)]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_reranker = _FakeReranker()
@@ -117,7 +130,7 @@ def test_search_returns_ranked_chunks(tmp_path):
     chunks = [_chunk(document_id, 0), _chunk(document_id, 1)]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
@@ -154,7 +167,7 @@ def test_search_top_k_larger_than_available_returns_all(tmp_path):
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
@@ -173,7 +186,7 @@ def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, ca
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    vector_ids = _persist_and_index(document_id, chunks, vectors, faiss_index)
+    vector_ids = _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     # Index a vector_id that was never persisted to Postgres, simulating the two stores
     # having diverged (see ERP-011's "Known Limitations": writes are not atomic).
@@ -232,7 +245,7 @@ def test_search_requests_oversampled_candidates_from_each_retriever_before_fusio
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     recorded_faiss_k = []
     original_faiss_search = faiss_index.search
@@ -276,7 +289,7 @@ def test_search_fuses_overlapping_vector_and_bm25_hits(tmp_path):
     ]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
@@ -366,7 +379,7 @@ def test_search_with_expand_sections_true_appends_section_siblings(tmp_path):
     ]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
@@ -387,7 +400,7 @@ def test_search_with_expand_sections_false_matches_baseline(tmp_path):
     chunks = [_chunk(document_id, 0, section_path=["Chapter 1", "Background"])]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     results = search(
@@ -409,7 +422,7 @@ def test_search_composes_rerank_and_expand_sections(tmp_path):
     ]
     vectors = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_reranker = _FakeReranker()
@@ -503,7 +516,7 @@ def test_search_populates_cache_on_miss(tmp_path):
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
     faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
-    _persist_and_index(document_id, chunks, vectors, faiss_index)
+    _persist_and_index(document_id, chunks, vectors, faiss_index, _TEST_OWNER_ID)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     fake_cache = _FakeRetrievalCache()

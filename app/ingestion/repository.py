@@ -1,5 +1,6 @@
 """Persistence for ingested documents and their chunks."""
 
+import uuid
 from collections.abc import Set as AbstractSet
 
 from sqlalchemy import func, select
@@ -10,13 +11,17 @@ from app.ingestion.schemas import Chunk
 
 
 def save_document_and_chunks(
-    session: Session, document_id: str, source_filename: str, chunks: list[Chunk]
+    session: Session,
+    document_id: str,
+    source_filename: str,
+    chunks: list[Chunk],
+    owner_id: uuid.UUID,
 ) -> list[ChunkRecord]:
     """Persist one document and its chunks in `session`, flushing so `vector_id`s are assigned.
 
     Does not commit — the caller controls the transaction boundary.
     """
-    session.add(DocumentRecord(document_id=document_id, filename=source_filename))
+    session.add(DocumentRecord(document_id=document_id, filename=source_filename, owner_id=owner_id))
     session.flush()
 
     records = [

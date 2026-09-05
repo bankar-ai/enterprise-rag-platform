@@ -1,5 +1,7 @@
 """Orchestrates embedding a document's chunks and persisting them to Postgres + FAISS."""
 
+import uuid
+
 from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
@@ -12,6 +14,7 @@ def embed_and_persist(
     document_id: str,
     source_filename: str,
     chunks: list[Chunk],
+    owner_id: uuid.UUID,
     settings: EmbeddingSettings | None = None,
     embedding_client: EmbeddingClient | None = None,
     faiss_index: FaissIndex | None = None,
@@ -33,7 +36,7 @@ def embed_and_persist(
 
     session_factory = get_session_factory()
     with session_factory() as session:
-        records = save_document_and_chunks(session, document_id, source_filename, chunks)
+        records = save_document_and_chunks(session, document_id, source_filename, chunks, owner_id)
         vector_ids = [record.vector_id for record in records]
         session.commit()
 

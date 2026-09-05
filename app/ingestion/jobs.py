@@ -20,18 +20,19 @@ _lock = threading.Lock()
 class JobRecord:
     """Mutable state for one tracked ingestion job."""
 
-    def __init__(self) -> None:
-        """Initialize a new job in PENDING status with no result or error yet."""
+    def __init__(self, owner_id: uuid.UUID) -> None:
+        """Initialize a new job in PENDING status, owned by `owner_id`, with no result or error yet."""
+        self.owner_id = owner_id
         self.status: JobStatus = JobStatus.PENDING
         self.result: IngestResponse | None = None
         self.error: str | None = None
 
 
-def create_job() -> str:
-    """Register a new PENDING job and return its ID."""
+def create_job(owner_id: uuid.UUID) -> str:
+    """Register a new PENDING job owned by `owner_id` and return its ID."""
     job_id = str(uuid.uuid4())
     with _lock:
-        _jobs[job_id] = JobRecord()
+        _jobs[job_id] = JobRecord(owner_id)
     return job_id
 
 
@@ -46,13 +47,15 @@ def run_ingestion_job(
     pdf_path: str,
     filename: str,
     settings: IngestionSettings,
+    owner_id: uuid.UUID,
     embedding_client: EmbeddingClient | None = None,
     faiss_index: FaissIndex | None = None,
 ) -> None:
     """Run ingestion for `job_id`, recording DONE + result or FAILED + error on the job record.
 
-    On success, also embeds and durably persists the resulting chunks (Postgres + FAISS) —
-    a DONE job means the data is embedded and persisted, not just held in memory.
+    On success, also embeds and durably persists the resulting chunks (Postgres + FAISS),
+    stamping `owner_id` as the resulting document's owner — a DONE job means the data is
+    embedded and persisted, not just held in memory.
     """
     with _lock:
         _jobs[job_id].status = JobStatus.PROCESSING
@@ -63,6 +66,7 @@ def run_ingestion_job(
             document_id=result.document_id,
             source_filename=filename,
             chunks=result.chunks,
+            owner_id=owner_id,
             embedding_client=embedding_client,
             faiss_index=faiss_index,
         )

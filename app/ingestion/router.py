@@ -4,8 +4,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 
+from app.auth.dependencies import get_current_user
+from app.auth.schemas import CurrentUser
 from app.ingestion import jobs
 from app.ingestion.config import get_settings
 from app.ingestion.schemas import JobStatusResponse
@@ -18,7 +20,9 @@ _COPY_CHUNK_SIZE = 1024 * 1024
 
 @router.post("/pdf", status_code=status.HTTP_202_ACCEPTED)
 async def upload_pdf(
-    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, str]:
     """Validate and stream an uploaded PDF to disk, then schedule an async ingestion job."""
     if file.content_type != "application/pdf":
@@ -51,16 +55,24 @@ async def upload_pdf(
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
-    job_id = jobs.create_job()
-    background_tasks.add_task(jobs.run_ingestion_job, job_id, str(tmp_path), file.filename, settings)
+    job_id = jobs.create_job(current_user.id)
+    background_tasks.add_task(
+        jobs.run_ingestion_job, job_id, str(tmp_path), file.filename, settings, current_user.id
+    )
 
     return {"job_id": job_id}
 
 
 @router.get("/jobs/{job_id}")
-def get_job_status(job_id: str) -> JobStatusResponse:
-    """Return the current status (and result or error, once finished) of an ingestion job."""
+def get_job_status(
+    job_id: str, current_user: CurrentUser = Depends(get_current_user)
+) -> JobStatusResponse:
+    """Return the current status (and result or error, once finished) of an ingestion job.
+
+    Returns 404 (not just for an unknown ID, but also for a job owned by a different user)
+    so a caller can't distinguish "doesn't exist" from "exists but isn't yours".
+    """
     record = jobs.get_job(job_id)
-    if record is None:
+    if record is None or record.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
     return JobStatusResponse(status=record.status, result=record.result, error=record.error)
