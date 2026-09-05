@@ -12,7 +12,12 @@ from fastapi.responses import StreamingResponse
 from app.auth.dependencies import get_current_user
 from app.auth.schemas import CurrentUser
 from app.generation.schemas import ConversationHistoryResponse, GenerationQuery, GenerationResponse
-from app.generation.service import generate, generate_stream, get_conversation_history
+from app.generation.service import (
+    ConversationAccessDeniedError,
+    generate,
+    generate_stream,
+    get_conversation_history,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,8 @@ def query(
             expand_sections=query_request.expand_sections,
             conversation_id=query_request.conversation_id,
         )
+    except ConversationAccessDeniedError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
     except Exception as exc:
         logger.exception("Generation query failed")
         raise HTTPException(status_code=503, detail="Generation query failed") from exc

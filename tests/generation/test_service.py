@@ -3,18 +3,29 @@ import uuid
 from app.core.db import get_session_factory
 from app.generation.config import GenerationSettings
 from app.generation.repository import append_message, get_or_create_conversation, get_recent_messages
-from app.generation.service import NO_CONTEXT_ANSWER, generate, generate_stream, get_conversation_history
+from app.generation.service import (
+    NO_CONTEXT_ANSWER,
+    ConversationAccessDeniedError,
+    generate,
+    generate_stream,
+    get_conversation_history,
+)
 from app.retrieval.schemas import RetrievedChunk
 
 _TEST_OWNER_ID = uuid.uuid4()
+_OTHER_OWNER_ID = uuid.uuid4()
+
+
+def _ensure_owner(session, owner_id):
+    from app.auth.models import UserRecord
+
+    if session.get(UserRecord, owner_id) is None:
+        session.add(UserRecord(id=owner_id, email=f"{owner_id}@test", hashed_password="x"))
+        session.flush()
 
 
 def _ensure_test_owner(session):
-    from app.auth.models import UserRecord
-
-    if session.get(UserRecord, _TEST_OWNER_ID) is None:
-        session.add(UserRecord(id=_TEST_OWNER_ID, email=f"{_TEST_OWNER_ID}@test", hashed_password="x"))
-        session.flush()
+    _ensure_owner(session, _TEST_OWNER_ID)
 
 
 def _chunk(chunk_id):
@@ -266,6 +277,39 @@ def test_generate_conversation_short_circuit_still_persists_turns(monkeypatch):
         messages = get_recent_messages(session, conversation_id, limit=10)
     assert [m.role for m in messages] == ["user", "assistant"]
     assert messages[1].content == NO_CONTEXT_ANSWER
+
+
+def test_generate_raises_access_denied_for_other_owners_conversation(monkeypatch):
+    conversation_id = uuid.uuid4()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        _ensure_owner(session, _OTHER_OWNER_ID)
+        get_or_create_conversation(session, conversation_id, _OTHER_OWNER_ID)
+        session.commit()
+
+    with session_factory() as session:
+        _ensure_test_owner(session)
+        session.commit()
+
+    def _fail_search(*a, **k):
+        raise AssertionError("retrieval should not run when access is denied")
+
+    monkeypatch.setattr("app.generation.service.retrieval_search", _fail_search)
+    fake_llm = _FakeLLMClient("should not be used")
+
+    try:
+        generate(
+            "what is X?",
+            top_k=5,
+            owner_id=_TEST_OWNER_ID,
+            conversation_id=conversation_id,
+            llm_client=fake_llm,
+        )
+        raise AssertionError("expected ConversationAccessDeniedError")
+    except ConversationAccessDeniedError:
+        pass
+
+    assert fake_llm.calls == []
 
 
 def test_get_conversation_history_returns_none_for_unknown_id():

@@ -23,6 +23,17 @@ def get_or_create_conversation(
     return conversation
 
 
+def get_conversation_owner_id(session: Session, conversation_id: uuid.UUID) -> uuid.UUID | None:
+    """Return the owner_id of `conversation_id` if it already exists, else `None`.
+
+    Does not filter by owner -- this is a raw existence+ownership lookup, used to detect
+    (before doing any work) whether a client-supplied conversation_id belongs to someone
+    else, distinct from `get_conversation`'s "does it belong to owner_id" check.
+    """
+    conversation = session.get(ConversationRecord, conversation_id)
+    return None if conversation is None else conversation.owner_id
+
+
 def append_message(
     session: Session, conversation_id: uuid.UUID, role: str, content: str
 ) -> ConversationMessageRecord:

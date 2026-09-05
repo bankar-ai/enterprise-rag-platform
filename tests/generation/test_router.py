@@ -223,6 +223,49 @@ def test_get_conversation_returns_history_ordered_oldest_first(monkeypatch, auth
     assert body["messages"][1]["content"] == "the answer"
 
 
+def test_query_returns_404_when_conversation_id_belongs_to_another_user(monkeypatch):
+    import uuid
+
+    from app.retrieval.schemas import RetrievedChunk
+
+    conversation_id = str(uuid.uuid4())
+    chunk = RetrievedChunk(
+        chunk_id="c1",
+        document_id="doc-1",
+        text="some text",
+        section_path=["Intro"],
+        page_start=1,
+        page_end=1,
+        source_filename="doc.pdf",
+        score=0.9,
+    )
+    monkeypatch.setattr("app.generation.service.retrieval_search", lambda *a, **k: [chunk])
+
+    from app.generation.client import OllamaLLMClient
+
+    monkeypatch.setattr(
+        OllamaLLMClient, "generate", lambda self, system_prompt, user_prompt: "the answer"
+    )
+
+    headers_a = register_and_login(client, "generation-owner-a")
+    headers_b = register_and_login(client, "generation-owner-b")
+
+    create_response = client.post(
+        "/generation/query",
+        json={"query": "what is the deployment process?", "conversation_id": conversation_id},
+        headers=headers_a,
+    )
+    assert create_response.status_code == 200
+
+    response = client.post(
+        "/generation/query",
+        json={"query": "what about the second one?", "conversation_id": conversation_id},
+        headers=headers_b,
+    )
+
+    assert response.status_code == 404
+
+
 def _parse_sse(text: str) -> list[tuple[str, dict]]:
     events = []
     for block in text.strip("\n").split("\n\n"):

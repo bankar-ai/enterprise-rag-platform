@@ -12,6 +12,7 @@ from app.generation.repository import (
     append_message,
     get_all_messages,
     get_conversation,
+    get_conversation_owner_id,
     get_or_create_conversation,
     get_recent_messages,
 )
@@ -29,6 +30,10 @@ from app.retrieval.service import search as retrieval_search
 logger = logging.getLogger(__name__)
 
 NO_CONTEXT_ANSWER = "I don't have enough information in the ingested documents to answer this question."
+
+
+class ConversationAccessDeniedError(Exception):
+    """Raised when a client-supplied `conversation_id` already exists but belongs to a different owner."""
 
 
 def _citations_for(chunks: list[RetrievedChunk]) -> list[Citation]:
@@ -69,10 +74,9 @@ def generate(
     together in one transaction via a second, separately opened write session, but only
     after generation succeeds -- a failure commits nothing (the write session isn't even
     opened until `answer`/`citations` are fully computed). A conversation created here is
-    owned by `owner_id`; an existing conversation belonging to a different owner is treated
-    as brand new (see `get_or_create_conversation`) rather than raising, since `generate`
-    has no read-then-reject path -- ownership enforcement for reads happens in
-    `get_conversation_history`.
+    owned by `owner_id`; if `conversation_id` already exists and belongs to a different
+    owner, raises `ConversationAccessDeniedError` before any history is read, retrieval
+    runs, or the LLM is called -- the router maps this to a 404.
 
     Runs the existing hybrid retrieval pipeline unmodified (`rerank`/`expand_sections`
     passed straight through). If retrieval returns no chunks, short-circuits to
@@ -100,6 +104,9 @@ def generate(
     session_factory = get_session_factory()
 
     with session_factory() as read_session:
+        existing_owner_id = get_conversation_owner_id(read_session, conversation_id)
+        if existing_owner_id is not None and existing_owner_id != owner_id:
+            raise ConversationAccessDeniedError
         history_records = get_recent_messages(
             read_session, conversation_id, settings.history_window_turns
         )
@@ -181,6 +188,9 @@ def generate_stream(
 
         session_factory = get_session_factory()
         with session_factory() as read_session:
+            existing_owner_id = get_conversation_owner_id(read_session, conversation_id)
+            if existing_owner_id is not None and existing_owner_id != owner_id:
+                raise ConversationAccessDeniedError
             history_records = get_recent_messages(
                 read_session, conversation_id, settings.history_window_turns
             )
