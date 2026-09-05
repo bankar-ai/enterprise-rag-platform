@@ -1,10 +1,16 @@
 """Answer generation via a local Ollama chat model."""
 
+import time
 from typing import Iterator, Protocol
 
 import ollama
 
+from app.core.telemetry import get_meter, get_tracer
 from app.generation.config import GenerationSettings
+
+_duration_histogram = get_meter().create_histogram(
+    "llm_generation_duration_seconds", description="Duration of a non-streaming LLM generation call"
+)
 
 
 class LLMClient(Protocol):
@@ -30,16 +36,20 @@ class OllamaLLMClient:
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         """Send `system_prompt`/`user_prompt` to Ollama and return the response text."""
-        response = self._client.chat(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            options={"temperature": self._temperature},
-            think=False,
-        )
-        return response.message.content or ""
+        with get_tracer().start_as_current_span("llm.generate") as span:
+            span.set_attribute("llm.model", self._model)
+            start = time.monotonic()
+            response = self._client.chat(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                options={"temperature": self._temperature},
+                think=False,
+            )
+            _duration_histogram.record(time.monotonic() - start, {"model": self._model})
+            return response.message.content or ""
 
     def generate_stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
         """Stream `system_prompt`/`user_prompt` to Ollama, yielding response text chunks in order."""
