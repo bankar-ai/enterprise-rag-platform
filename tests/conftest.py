@@ -9,6 +9,7 @@ os.environ.setdefault(
 import fitz  # noqa: E402
 import pytest  # noqa: E402
 
+from app.auth.models import RefreshTokenRecord, UserRecord  # noqa: E402, F401
 from app.core.db import get_engine  # noqa: E402
 from app.ingestion.models import Base  # noqa: E402
 
