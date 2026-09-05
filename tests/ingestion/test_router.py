@@ -155,6 +155,22 @@ def test_get_job_status_404_for_unknown_job(auth_headers):
     assert response.status_code == 404
 
 
+def test_get_job_status_404_for_job_belonging_to_another_user(simple_text_pdf, auth_headers):
+    pdf_bytes = _read_fixture_bytes(simple_text_pdf)
+    response = client.post(
+        "/ingestion/pdf",
+        files={"file": ("simple.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        headers=auth_headers,
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    _poll_until_done(job_id, auth_headers)
+
+    other_user_headers = register_and_login(client, "ingestion-other-owner")
+    response = client.get(f"/ingestion/jobs/{job_id}", headers=other_user_headers)
+    assert response.status_code == 404
+
+
 def test_upload_pdf_rejects_oversized_file(monkeypatch, auth_headers):
     # Finding 3 (final whole-branch review): the upload endpoint streamed uploads of
     # unbounded size to a temp file with no size check — a resource-exhaustion risk.

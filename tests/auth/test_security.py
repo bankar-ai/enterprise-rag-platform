@@ -19,6 +19,14 @@ def test_hash_password_round_trips():
     assert not verify_password("wrong password", hashed)
 
 
+def test_verify_password_returns_false_for_not_a_valid_argon2_hash():
+    # Finding 2 (final whole-branch review): the migration-seeded `system` user's
+    # hashed_password is "!" (deliberately not a valid Argon2 hash, so it can never
+    # authenticate) -- argon2-cffi raises InvalidHashError (a ValueError subclass, not
+    # VerifyMismatchError) for this input, which used to propagate uncaught.
+    assert verify_password("anything", "!") is False
+
+
 def test_generate_refresh_token_is_unique_and_hash_is_deterministic():
     token_a = generate_refresh_token()
     token_b = generate_refresh_token()

@@ -5,6 +5,10 @@ import os
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/erp_test"
 )
+# Required by app.auth.config.AuthSettings (no default -- see that module's docstring).
+# Set here, not just in tests/auth/conftest.py, so any test file can safely construct
+# AuthSettings regardless of pytest's (alphabetical) collection order.
+os.environ.setdefault("AUTH_JWT_SECRET_KEY", "test-only-secret-do-not-use-in-production")
 
 import fitz  # noqa: E402
 import pytest  # noqa: E402

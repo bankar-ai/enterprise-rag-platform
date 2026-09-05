@@ -61,6 +61,27 @@ def get_chunks_by_vector_ids(
     return {row.vector_id: row for row in rows}
 
 
+def filter_vector_ids_by_owner(
+    session: Session, vector_ids: list[int], owner_id: uuid.UUID
+) -> list[int]:
+    """Return the subset of `vector_ids` whose chunk belongs to a document owned by `owner_id`.
+
+    Used to restrict FAISS search hits (which carry no owner information of their own) to
+    `owner_id`'s documents *before* rank fusion truncates to `top_k`, so another owner's
+    vector hits can't consume a caller's result slots. Order is not preserved -- callers that
+    need best-first order should filter their original list against the returned set rather
+    than use this list directly.
+    """
+    if not vector_ids:
+        return []
+    rows = session.scalars(
+        select(ChunkRecord.vector_id)
+        .join(DocumentRecord, ChunkRecord.document_id == DocumentRecord.document_id)
+        .where(ChunkRecord.vector_id.in_(vector_ids), DocumentRecord.owner_id == owner_id)
+    ).all()
+    return list(rows)
+
+
 def search_chunks_by_text(
     session: Session, query_text: str, k: int, owner_id: uuid.UUID
 ) -> list[tuple[int, float]]:

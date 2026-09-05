@@ -9,7 +9,7 @@ Related roadmap item: `docs/roadmap.md` "Authentication"; `docs/architecture.md`
 Add authentication and authorization to the platform, with two goals:
 
 1. **Access control** — every existing API endpoint requires a valid identity; no more anonymous access.
-2. **Per-user data isolation** — each user only sees/queries their own uploaded documents and conversations. A role system (`admin` vs `user`) sits on top, where `admin` can see/manage all users' data.
+2. **Per-user data isolation** — each user only sees/queries their own uploaded documents and conversations. A role system (`admin` vs `user`) sits on top as a role *distinction* only — this ticket ships role enforcement (the two roles exist and are checked), not any elevated admin data-visibility privilege. Every ownership check in the codebase is a bare `owner_id == current_user.id` equality with no admin exception; an `admin` cross-user visibility bypass is explicitly deferred (see Future Follow-ups), not silently omitted.
 
 This closes the "Authentication" gap named in `docs/roadmap.md` and `docs/architecture.md`'s Project Goals, and completes ADR-003's third named Redis use (session/auth-token cache), which was blocked on this ticket (see ERP-021/ERP-022 current-state notes).
 
@@ -68,7 +68,7 @@ New `app/auth/` module (`models.py`, `schemas.py`, `service.py`, `router.py`, `s
 - **`POST /auth/register`** — email + password → creates a `users` row (role always defaults to `user`; there is no API path to create an `admin` — see Future Follow-ups).
 - **`POST /auth/login`** — email + password → issues a short-lived access JWT (claims: `sub`=user_id, `role`; e.g. 30 min expiry) plus an opaque refresh token (only its hash persisted).
 - **`POST /auth/refresh`** — presents a valid refresh token → rotates it (old token marked `revoked_at`, new one issued) and returns a new access JWT. Rotation-on-use means a replayed old refresh token is detectable (already revoked), a standard mitigation for refresh-token theft.
-- **`POST /auth/logout`** — revokes the presented refresh token.
+- **`POST /auth/logout`** — revokes the presented refresh token. Note: only the refresh token is revoked -- the short-lived access JWT already issued is not, and remains valid until its natural expiry (this is intended, not an oversight: access tokens are stateless-verified and were never checked against Redis/Postgres on each request).
 
 **Protecting existing routes:** a `get_current_user` FastAPI dependency (via `OAuth2PasswordBearer`; validates JWT signature + expiry, loads the user) is added to every existing router (`ingestion`, `retrieval`, `generation`, `conversations`). A `require_role("admin")` dependency exists for future admin-only endpoints (none ship in this ticket).
 
@@ -106,5 +106,6 @@ Logged explicitly per user instruction during brainstorming (2026-09-05), so the
 2. **External IdP / OAuth2 / OIDC integration** — deferred; local email+password is the v1 identity model.
 3. **Admin user-management endpoints** — list/disable users, force-revoke sessions. Only role *enforcement* (`admin` vs `user`) ships in this ticket; no admin-facing API surface yet.
 4. **Self-service admin account creation** — deliberately not exposed via `POST /auth/register`; the first `admin` user is created via a seed/manual DB step.
+5. **Admin cross-user data visibility** — distinct from item 3 above (which is about missing API surface): no code path lets an `admin` see or manage another user's documents/conversations today; every ownership check is a bare `owner_id` equality with no role-based bypass. Implementing this bypass is deferred rather than added at the tail end of this security feature, since untested privilege-escalation code is worse than an explicitly documented gap.
 
 This list should be mirrored into `.ai/memory/current-state.md`'s "Next Planned Work" once this ticket is implemented and merged.

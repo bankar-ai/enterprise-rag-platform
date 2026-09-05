@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 from app.auth.service import (
@@ -9,6 +11,29 @@ from app.auth.service import (
     refresh_access_token,
     register_user,
 )
+
+# Mirrors the migration-seeded `system` user (alembic/versions/d456a2953c15_...): a fixed
+# account with hashed_password="!" (deliberately not a valid Argon2 hash, so it can never
+# authenticate). The test schema is built via `Base.metadata.create_all` (tests/conftest.py),
+# which does not run the migration's data seed, so this row is inserted directly here.
+_SYSTEM_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+_SYSTEM_USER_EMAIL = "system@internal"
+_SYSTEM_USER_HASH = "!"
+
+
+def _ensure_system_user_seeded():
+    from app.auth.models import UserRecord
+    from app.core.db import get_session_factory
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        if session.get(UserRecord, _SYSTEM_USER_ID) is None:
+            session.add(
+                UserRecord(
+                    id=_SYSTEM_USER_ID, email=_SYSTEM_USER_EMAIL, hashed_password=_SYSTEM_USER_HASH
+                )
+            )
+            session.commit()
 
 
 def test_register_user_then_login_succeeds(auth_settings):
@@ -65,3 +90,14 @@ def test_logout_revokes_token(auth_settings):
 
 def test_logout_of_unknown_token_is_a_no_op():
     logout("not-a-real-refresh-token")
+
+
+def test_login_against_seeded_system_user_raises_invalid_credentials(auth_settings):
+    # Finding 2 (final whole-branch review): verify_password used to only catch
+    # VerifyMismatchError, so authenticating against the seeded system user's "!"
+    # (not-a-valid-Argon2-hash) placeholder raised an uncaught InvalidHashError instead of
+    # the intended InvalidCredentialsError -- an uncaught exception (500 at the router) that
+    # also doubled as a user-enumeration oracle (500 vs 401 confirms the account exists).
+    _ensure_system_user_seeded()
+    with pytest.raises(InvalidCredentialsError):
+        login(_SYSTEM_USER_EMAIL, "anything-at-all", settings=auth_settings)

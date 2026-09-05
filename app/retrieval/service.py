@@ -15,7 +15,12 @@ from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
-from app.ingestion.repository import get_chunks_by_vector_ids, get_sibling_chunks, search_chunks_by_text
+from app.ingestion.repository import (
+    filter_vector_ids_by_owner,
+    get_chunks_by_vector_ids,
+    get_sibling_chunks,
+    search_chunks_by_text,
+)
 from app.retrieval.cache import RetrievalCache, get_default_retrieval_cache
 from app.retrieval.config import get_reranker_settings
 from app.retrieval.reranker import FlashRankReranker, Reranker
@@ -168,6 +173,13 @@ def search(
 
     session_factory = get_session_factory()
     with session_factory() as session:
+        # Restrict FAISS's (owner-blind) candidates to owner_id's own documents BEFORE
+        # fusion truncates to top_k -- otherwise another owner's higher-ranked vector hits
+        # can consume result slots that should have gone to the caller's own matches. Order
+        # is preserved (best-first) since RRF's rank contribution depends on list position.
+        owned_vector_ids = set(filter_vector_ids_by_owner(session, vector_ranked_ids, owner_id))
+        vector_ranked_ids = [vid for vid in vector_ranked_ids if vid in owned_vector_ids]
+
         bm25_hits = search_chunks_by_text(session, query, candidate_k, owner_id)
         bm25_ranked_ids = [vector_id for vector_id, _ in bm25_hits]
 

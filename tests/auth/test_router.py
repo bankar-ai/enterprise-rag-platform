@@ -63,3 +63,15 @@ def test_login_rejects_wrong_password():
 def test_refresh_rejects_unknown_token():
     response = client.post("/auth/refresh", json={"refresh_token": "not-a-real-token"})
     assert response.status_code == 401
+
+
+# Note on Finding 2 (final whole-branch review, uncaught InvalidHashError against the seeded
+# `system` user): the literal seeded email "system@internal" has no dot in its domain part,
+# so LoginRequest's own email-shape validator (app/auth/schemas.py's _EMAIL_PATTERN) rejects
+# it with a 422 before the request body ever reaches app.auth.service.login -- the router
+# can't be used to reach the buggy code path at all for this exact email. The actual fix and
+# its regression coverage live one layer down: tests/auth/test_security.py asserts
+# verify_password("anything", "!") returns False rather than raising, and
+# tests/auth/test_service.py::test_login_against_seeded_system_user_raises_invalid_credentials
+# asserts service.login (called directly, bypassing the router's email-shape gate) raises
+# InvalidCredentialsError rather than an uncaught InvalidHashError.

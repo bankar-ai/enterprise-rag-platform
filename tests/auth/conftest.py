@@ -2,7 +2,6 @@
 
 import os
 
-os.environ.setdefault("AUTH_JWT_SECRET_KEY", "test-only-secret-do-not-use-in-production")
 os.environ.setdefault("AUTH_REDIS_URL", "redis://localhost:6379/3")
 
 import pytest  # noqa: E402

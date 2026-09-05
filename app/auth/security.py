@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError
 
 from app.auth.config import AuthSettings
 from app.auth.schemas import CurrentUser
@@ -32,10 +32,19 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    """Return `True` if `password` matches `hashed_password`."""
+    """Return `True` if `password` matches `hashed_password`.
+
+    Catches `VerificationError` (the parent of `VerifyMismatchError`, argon2-cffi's normal
+    "wrong password" signal) and `InvalidHashError` (a `ValueError` subclass raised when
+    `hashed_password` isn't a well-formed Argon2 hash at all -- e.g. the migration-seeded
+    `system` user's deliberately-unauthenticatable `"!"` placeholder). Both mean "this
+    password does not authenticate", not a server error; letting either propagate would 500
+    instead of the intended 401, and the 500-vs-401 difference would itself leak which
+    emails exist.
+    """
     try:
         _password_hasher.verify(hashed_password, password)
-    except VerifyMismatchError:
+    except (VerificationError, InvalidHashError):
         return False
     return True
 

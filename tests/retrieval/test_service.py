@@ -186,7 +186,7 @@ def test_search_top_k_larger_than_available_returns_all(tmp_path):
     assert len(results) == 1
 
 
-def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, caplog):
+def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, caplog, monkeypatch):
     document_id = "doc-search-test-3"
     chunks = [_chunk(document_id, 0)]
     vectors = [[1.0, 0.0, 0.0, 0.0]]
@@ -198,6 +198,21 @@ def test_search_drops_orphaned_faiss_hit_with_no_matching_chunk_row(tmp_path, ca
     orphan_vector_id = 999_999_999
     faiss_index.add([orphan_vector_id], [[1.0, 0.0, 0.0, 0.0]])
     faiss_index.save()
+
+    # Finding 1's fix filters FAISS hits down to owner_id's actually-persisted chunks
+    # before fusion, which would also (correctly) exclude this never-persisted orphan
+    # before it reaches the hydration-drop path this test targets. Simulate the orphan
+    # surviving that earlier filter (e.g. a chunk deleted between the filter query and
+    # hydration) so the hydration-time defensive drop+warning still gets exercised.
+    original_filter = service_module.filter_vector_ids_by_owner
+
+    def _filter_but_let_orphan_through(session, vector_ids_arg, owner_id):
+        filtered = original_filter(session, vector_ids_arg, owner_id)
+        if orphan_vector_id in vector_ids_arg:
+            filtered = [*filtered, orphan_vector_id]
+        return filtered
+
+    monkeypatch.setattr(service_module, "filter_vector_ids_by_owner", _filter_but_let_orphan_through)
 
     fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
     with caplog.at_level("WARNING"):
@@ -582,6 +597,62 @@ def test_cache_key_differs_by_rerank_and_expand_sections_flags():
 def test_cache_key_differs_by_owner_id():
     base = service_module._cache_key("q", 5, False, False, _TEST_OWNER_ID)
     assert service_module._cache_key("q", 5, False, False, uuid.uuid4()) != base
+
+
+def test_search_filters_foreign_owner_vector_hits_before_truncating_to_top_k(tmp_path):
+    """Regression test for Finding 1 (final whole-branch review).
+
+    Fusion used to truncate to `top_k` using vector IDs from FAISS's owner-blind search,
+    before the owner filter ever ran -- so other users' higher-ranked (by raw vector
+    similarity) documents could consume a caller's `top_k` slots, leaving the caller with
+    fewer results than they own, even zero.
+
+    Three users each ingest a document. Every document's embedding is a real (if imperfect)
+    semantic match for the query, but only ranked *worst* of the three in FAISS's raw
+    (owner-blind) neighbor order for the calling user's document -- the other two owners'
+    documents rank better purely by vector similarity. The query text is deliberately
+    disjoint from every chunk's lexical content, so BM25 finds nothing for anyone and this
+    is a vector-only match. With `top_k=1`, truncation keeps only one winner post-fusion --
+    with the bug, that slot goes to whichever *other* owner's vector_id ranks first in
+    FAISS's raw list (dropped at hydration as a foreign-owner row, per the existing orphan
+    handling), leaving the calling user with 0 results despite owning a real matching
+    document. With the fix, the calling user's own (worse-ranked but real) vector_id is the
+    only candidate that survives to fusion, so it wins the single slot.
+    """
+    from app.auth.models import UserRecord
+
+    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    owner_ids = [uuid.uuid4() for _ in range(3)]
+    # Best-to-worst raw vector similarity to the query vector [1, 0, 0, 0]; the *last* owner
+    # (worst match) is the one whose isolation we're testing.
+    vectors = [[1.0, 0.0, 0.0, 0.0], [0.99, 0.01, 0.0, 0.0], [0.9, 0.1, 0.0, 0.0]]
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        for owner_id in owner_ids:
+            session.add(UserRecord(id=owner_id, email=f"{owner_id}@test", hashed_password="x"))
+        session.commit()
+
+    for owner_id, vector in zip(owner_ids, vectors, strict=True):
+        document_id = f"doc-isolation-{owner_id}"
+        # Distinctive nonsense words, absent from the query below, so BM25 (full-text) finds
+        # no match for anyone -- this test is isolating the vector-only path.
+        chunks = [_chunk(document_id, 0, text="zqlorp fribbentast wobsedge quennifer")]
+        _persist_and_index(document_id, chunks, [vector], faiss_index, owner_id)
+
+    fake_client = _FakeEmbeddingClient(vector=[1.0, 0.0, 0.0, 0.0])
+    target_owner = owner_ids[-1]  # the worst-ranked-by-raw-vector-similarity owner
+    results = search(
+        query="completely unrelated query text",
+        top_k=1,
+        owner_id=target_owner,
+        settings=EmbeddingSettings(dimension=4),
+        embedding_client=fake_client,
+        faiss_index=faiss_index,
+    )
+
+    assert len(results) == 1
+    assert results[0].chunk_id == f"doc-isolation-{target_owner}-0"
 
 
 def test_search_raises_when_embedding_client_returns_no_vectors(tmp_path):
