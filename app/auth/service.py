@@ -1,5 +1,6 @@
 """Business logic for registration, login, refresh-token rotation, and logout."""
 
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.auth.cache import RevocationCache, get_default_revocation_cache
@@ -10,7 +11,11 @@ from app.auth.repository import (
     create_user,
     get_refresh_token_by_hash,
     get_user_by_email,
+    get_user_by_id,
+    list_users,
+    revoke_all_refresh_tokens_for_user,
     revoke_refresh_token,
+    set_user_active,
 )
 from app.auth.schemas import TokenResponse
 from app.auth.security import (
@@ -33,6 +38,14 @@ class InvalidCredentialsError(Exception):
 
 class InvalidRefreshTokenError(Exception):
     """Raised when a presented refresh token is missing, expired, or revoked."""
+
+
+class AccountDisabledError(Exception):
+    """Raised when a login or refresh is attempted for a disabled user."""
+
+
+class UserNotFoundError(Exception):
+    """Raised when an admin operation targets an unknown user id."""
 
 
 def _as_aware_utc(value: datetime) -> datetime:
@@ -70,6 +83,9 @@ def login(
 
     Raises `InvalidCredentialsError` for either an unknown email or a wrong password —
     deliberately the same error for both, to avoid confirming which emails are registered.
+    Raises `AccountDisabledError` if the password matched but the account is disabled — safe
+    to distinguish here since the password was already verified, so it reveals nothing new
+    about which emails are registered.
     """
     settings = settings or get_auth_settings()
     session_factory = get_session_factory()
@@ -77,6 +93,8 @@ def login(
         user = get_user_by_email(session, email)
         if user is None or not verify_password(password, user.hashed_password):
             raise InvalidCredentialsError
+        if not user.is_active:
+            raise AccountDisabledError
     return _issue_tokens(user, settings)
 
 
@@ -113,6 +131,8 @@ def refresh_access_token(
         user = session.get(UserRecord, record.user_id)
         if user is None:
             raise InvalidRefreshTokenError
+        if not user.is_active:
+            raise AccountDisabledError
 
         remaining_ttl = max(0, int((_as_aware_utc(record.expires_at) - now).total_seconds()))
         revoke_refresh_token(session, record)
@@ -138,3 +158,38 @@ def logout(raw_refresh_token: str, revocation_cache: RevocationCache | None = No
         session.commit()
 
     revocation_cache.mark_revoked(token_hash, remaining_ttl)
+
+
+def list_all_users() -> list[UserRecord]:
+    """Return every registered user, ordered by creation time."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        return list_users(session)
+
+
+def set_user_active_status(user_id: uuid.UUID, is_active: bool) -> UserRecord:
+    """Enable or disable `user_id`'s account. Raises `UserNotFoundError` if unknown."""
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        user = get_user_by_id(session, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+        set_user_active(session, user, is_active)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+def revoke_user_sessions(user_id: uuid.UUID) -> None:
+    """Revoke every active refresh token belonging to `user_id`. Raises `UserNotFoundError` if unknown.
+
+    A DB-only bulk revoke -- deliberately doesn't touch the revocation cache (which is a
+    fast-path optimization, not authoritative; see `refresh_access_token`'s DB fallback check).
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        user = get_user_by_id(session, user_id)
+        if user is None:
+            raise UserNotFoundError(user_id)
+        revoke_all_refresh_tokens_for_user(session, user_id)
+        session.commit()
