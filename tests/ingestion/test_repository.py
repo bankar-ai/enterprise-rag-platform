@@ -65,7 +65,7 @@ def test_get_chunks_by_vector_ids_returns_rows_keyed_by_vector_id():
         vector_ids = [record.vector_id for record in records]
 
     with session_factory() as session:
-        found = get_chunks_by_vector_ids(session, vector_ids)
+        found = get_chunks_by_vector_ids(session, vector_ids, _TEST_OWNER_ID)
 
         assert set(found.keys()) == set(vector_ids)
         for vector_id, record in found.items():
@@ -76,13 +76,13 @@ def test_get_chunks_by_vector_ids_returns_rows_keyed_by_vector_id():
 def test_get_chunks_by_vector_ids_empty_input_returns_empty_dict():
     session_factory = get_session_factory()
     with session_factory() as session:
-        assert get_chunks_by_vector_ids(session, []) == {}
+        assert get_chunks_by_vector_ids(session, [], _TEST_OWNER_ID) == {}
 
 
 def test_get_chunks_by_vector_ids_ignores_unknown_ids():
     session_factory = get_session_factory()
     with session_factory() as session:
-        assert get_chunks_by_vector_ids(session, [999_999_999]) == {}
+        assert get_chunks_by_vector_ids(session, [999_999_999], _TEST_OWNER_ID) == {}
 
 
 def test_search_chunks_by_text_ranks_matching_chunk_first():
@@ -100,7 +100,7 @@ def test_search_chunks_by_text_ranks_matching_chunk_first():
         vector_ids = [record.vector_id for record in records]
 
     with session_factory() as session:
-        results = search_chunks_by_text(session, "giraffes Africa", k=5)
+        results = search_chunks_by_text(session, "giraffes Africa", k=5, owner_id=_TEST_OWNER_ID)
 
     assert results
     assert results[0][0] == vector_ids[0]
@@ -109,13 +109,13 @@ def test_search_chunks_by_text_ranks_matching_chunk_first():
 def test_search_chunks_by_text_no_match_returns_empty_list():
     session_factory = get_session_factory()
     with session_factory() as session:
-        assert search_chunks_by_text(session, "zzzznonexistentqueryterm", k=5) == []
+        assert search_chunks_by_text(session, "zzzznonexistentqueryterm", k=5, owner_id=_TEST_OWNER_ID) == []
 
 
 def test_search_chunks_by_text_empty_query_returns_empty_list():
     session_factory = get_session_factory()
     with session_factory() as session:
-        assert search_chunks_by_text(session, "", k=5) == []
+        assert search_chunks_by_text(session, "", k=5, owner_id=_TEST_OWNER_ID) == []
 
 
 def test_get_sibling_chunks_returns_only_matching_section_ordered_by_chunk_index():

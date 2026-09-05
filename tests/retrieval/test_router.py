@@ -1,4 +1,5 @@
 import time
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,19 @@ from app.embedding.config import get_embedding_settings
 from app.main import app
 
 client = TestClient(app)
+
+
+def _register_and_login(prefix: str) -> dict[str, str]:
+    email = f"{prefix}-{uuid.uuid4()}@example.com"
+    client.post("/auth/register", json={"email": email, "password": "a-long-enough-password"})
+    login_response = client.post("/auth/login", json={"email": email, "password": "a-long-enough-password"})
+    token = login_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def auth_headers():
+    return _register_and_login("retrieval-test")
 
 
 @pytest.fixture(autouse=True)
@@ -31,39 +45,40 @@ def _stub_embedding_backend(monkeypatch, tmp_path):
         get_embedding_settings.cache_clear()
 
 
-def test_query_on_empty_index_returns_empty_results():
-    response = client.post("/retrieval/query", json={"query": "anything"})
+def test_query_on_empty_index_returns_empty_results(auth_headers):
+    response = client.post("/retrieval/query", json={"query": "anything"}, headers=auth_headers)
     assert response.status_code == 200
     assert response.json() == {"results": []}
 
 
-def test_query_rejects_empty_query_string():
-    response = client.post("/retrieval/query", json={"query": ""})
+def test_query_rejects_empty_query_string(auth_headers):
+    response = client.post("/retrieval/query", json={"query": ""}, headers=auth_headers)
     assert response.status_code == 422
 
 
-def test_query_rejects_top_k_out_of_bounds():
-    response = client.post("/retrieval/query", json={"query": "x", "top_k": 0})
+def test_query_rejects_top_k_out_of_bounds(auth_headers):
+    response = client.post("/retrieval/query", json={"query": "x", "top_k": 0}, headers=auth_headers)
     assert response.status_code == 422
 
 
-def test_query_returns_503_when_embedding_backend_unavailable(monkeypatch):
+def test_query_returns_503_when_embedding_backend_unavailable(monkeypatch, auth_headers):
     def _raise_embed(self, texts):
         raise RuntimeError("connection refused")
 
     monkeypatch.setattr(OllamaEmbeddingClient, "embed", _raise_embed)
 
-    response = client.post("/retrieval/query", json={"query": "anything"})
+    response = client.post("/retrieval/query", json={"query": "anything"}, headers=auth_headers)
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Retrieval query failed"}
 
 
-def test_query_returns_ingested_chunk(simple_text_pdf):
+def test_query_returns_ingested_chunk(simple_text_pdf, auth_headers):
     with open(simple_text_pdf, "rb") as pdf_file:
         upload = client.post(
             "/ingestion/pdf",
             files={"file": ("simple.pdf", pdf_file, "application/pdf")},
+            headers=auth_headers,
         )
     assert upload.status_code == 202
     job_id = upload.json()["job_id"]
@@ -71,7 +86,7 @@ def test_query_returns_ingested_chunk(simple_text_pdf):
     deadline = time.monotonic() + 60.0
     status_body = None
     while time.monotonic() < deadline:
-        status_response = client.get(f"/ingestion/jobs/{job_id}")
+        status_response = client.get(f"/ingestion/jobs/{job_id}", headers=auth_headers)
         status_body = status_response.json()
         if status_body["status"] in ("done", "failed"):
             break
@@ -79,7 +94,9 @@ def test_query_returns_ingested_chunk(simple_text_pdf):
     assert status_body is not None
     assert status_body["status"] == "done"
 
-    response = client.post("/retrieval/query", json={"query": "introduction", "top_k": 3})
+    response = client.post(
+        "/retrieval/query", json={"query": "introduction", "top_k": 3}, headers=auth_headers
+    )
     assert response.status_code == 200
     results = response.json()["results"]
     assert results
@@ -87,7 +104,9 @@ def test_query_returns_ingested_chunk(simple_text_pdf):
     assert 0 < results[0]["score"] <= 1.0
 
     reranked_response = client.post(
-        "/retrieval/query", json={"query": "introduction", "top_k": 3, "rerank": True}
+        "/retrieval/query",
+        json={"query": "introduction", "top_k": 3, "rerank": True},
+        headers=auth_headers,
     )
     assert reranked_response.status_code == 200
     reranked_results = reranked_response.json()["results"]
@@ -95,9 +114,42 @@ def test_query_returns_ingested_chunk(simple_text_pdf):
     assert reranked_results[0]["document_id"] == status_body["result"]["document_id"]
 
     expanded_response = client.post(
-        "/retrieval/query", json={"query": "introduction", "top_k": 3, "expand_sections": True}
+        "/retrieval/query",
+        json={"query": "introduction", "top_k": 3, "expand_sections": True},
+        headers=auth_headers,
     )
     assert expanded_response.status_code == 200
     expanded_results = expanded_response.json()["results"]
     assert expanded_results
     assert expanded_results[0]["document_id"] == status_body["result"]["document_id"]
+
+
+def test_query_does_not_return_another_users_document(simple_text_pdf):
+    owner_a_headers = _register_and_login("isolation-a")
+    owner_b_headers = _register_and_login("isolation-b")
+
+    with open(simple_text_pdf, "rb") as pdf_file:
+        upload = client.post(
+            "/ingestion/pdf",
+            files={"file": ("simple.pdf", pdf_file, "application/pdf")},
+            headers=owner_a_headers,
+        )
+    job_id = upload.json()["job_id"]
+
+    deadline = time.monotonic() + 60.0
+    status_body = None
+    while time.monotonic() < deadline:
+        status_response = client.get(f"/ingestion/jobs/{job_id}", headers=owner_a_headers)
+        status_body = status_response.json()
+        if status_body["status"] in ("done", "failed"):
+            break
+        time.sleep(0.1)
+    assert status_body["status"] == "done"
+
+    response = client.post(
+        "/retrieval/query",
+        json={"query": "introduction", "top_k": 3},
+        headers=owner_b_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["results"] == []
