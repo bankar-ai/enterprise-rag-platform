@@ -6,6 +6,7 @@ from collections.abc import Set as AbstractSet
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.telemetry import get_tracer
 from app.ingestion.models import ChunkRecord, DocumentRecord
 from app.ingestion.schemas import Chunk
 
@@ -91,18 +92,23 @@ def search_chunks_by_text(
     matching chunks. Uses `plainto_tsquery` (safe against arbitrary user input, no `tsquery`
     syntax to escape) against the generated `search_vector` column, ranked by `ts_rank`.
     """
-    if not query_text.strip() or k <= 0:
-        return []
-    tsquery = func.plainto_tsquery("english", query_text)
-    rank = func.ts_rank(ChunkRecord.search_vector, tsquery).label("rank")
-    rows = session.execute(
-        select(ChunkRecord.vector_id, rank)
-        .join(DocumentRecord, ChunkRecord.document_id == DocumentRecord.document_id)
-        .where(ChunkRecord.search_vector.op("@@")(tsquery), DocumentRecord.owner_id == owner_id)
-        .order_by(rank.desc())
-        .limit(k)
-    ).all()
-    return [(int(vector_id), float(rank_value)) for vector_id, rank_value in rows]
+    with get_tracer().start_as_current_span("bm25.search") as span:
+        span.set_attribute("bm25.k", k)
+        if not query_text.strip() or k <= 0:
+            span.set_attribute("bm25.hits", 0)
+            return []
+        tsquery = func.plainto_tsquery("english", query_text)
+        rank = func.ts_rank(ChunkRecord.search_vector, tsquery).label("rank")
+        rows = session.execute(
+            select(ChunkRecord.vector_id, rank)
+            .join(DocumentRecord, ChunkRecord.document_id == DocumentRecord.document_id)
+            .where(ChunkRecord.search_vector.op("@@")(tsquery), DocumentRecord.owner_id == owner_id)
+            .order_by(rank.desc())
+            .limit(k)
+        ).all()
+        result = [(int(vector_id), float(rank_value)) for vector_id, rank_value in rows]
+        span.set_attribute("bm25.hits", len(result))
+        return result
 
 
 def get_sibling_chunks(
