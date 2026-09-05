@@ -48,13 +48,14 @@ def _citations_for(chunks: list[RetrievedChunk]) -> list[Citation]:
 def generate(
     query: str,
     top_k: int,
+    owner_id: uuid.UUID,
     rerank: bool = False,
     expand_sections: bool = False,
     conversation_id: uuid.UUID | None = None,
     settings: GenerationSettings | None = None,
     llm_client: LLMClient | None = None,
 ) -> GenerationResponse:
-    """Retrieve context for `query` and synthesize a grounded, citation-marked answer.
+    """Retrieve context for `query` (scoped to `owner_id`) and synthesize a grounded, citation-marked answer.
 
     `conversation_id` is a stateless/stateful switch. `None` (the default) is fully
     stateless: no session opened, no history loaded, no rewriting, nothing persisted --
@@ -67,7 +68,11 @@ def generate(
     generation prompt. Both the raw user turn and the assistant's answer are persisted
     together in one transaction via a second, separately opened write session, but only
     after generation succeeds -- a failure commits nothing (the write session isn't even
-    opened until `answer`/`citations` are fully computed).
+    opened until `answer`/`citations` are fully computed). A conversation created here is
+    owned by `owner_id`; an existing conversation belonging to a different owner is treated
+    as brand new (see `get_or_create_conversation`) rather than raising, since `generate`
+    has no read-then-reject path -- ownership enforcement for reads happens in
+    `get_conversation_history`.
 
     Runs the existing hybrid retrieval pipeline unmodified (`rerank`/`expand_sections`
     passed straight through). If retrieval returns no chunks, short-circuits to
@@ -81,7 +86,7 @@ def generate(
     settings = settings or get_generation_settings()
 
     if conversation_id is None:
-        chunks = retrieval_search(query, top_k, rerank=rerank, expand_sections=expand_sections)
+        chunks = retrieval_search(query, top_k, owner_id, rerank=rerank, expand_sections=expand_sections)
         if not chunks:
             return GenerationResponse(answer=NO_CONTEXT_ANSWER, citations=[], conversation_id=None)
 
@@ -106,7 +111,9 @@ def generate(
     else:
         rewritten_query = query
 
-    chunks = retrieval_search(rewritten_query, top_k, rerank=rerank, expand_sections=expand_sections)
+    chunks = retrieval_search(
+        rewritten_query, top_k, owner_id, rerank=rerank, expand_sections=expand_sections
+    )
     if not chunks:
         answer = NO_CONTEXT_ANSWER
         citations: list[Citation] = []
@@ -119,7 +126,7 @@ def generate(
         citations = _citations_for(included_chunks)
 
     with session_factory() as write_session:
-        get_or_create_conversation(write_session, conversation_id)
+        get_or_create_conversation(write_session, conversation_id, owner_id)
         append_message(write_session, conversation_id, "user", query)
         append_message(write_session, conversation_id, "assistant", answer)
         write_session.commit()
@@ -130,6 +137,7 @@ def generate(
 def generate_stream(
     query: str,
     top_k: int,
+    owner_id: uuid.UUID,
     rerank: bool = False,
     expand_sections: bool = False,
     conversation_id: uuid.UUID | None = None,
@@ -144,17 +152,19 @@ def generate_stream(
     `("error", {"detail": "..."})` instead of `"done"` -- callers must treat `"error"` as
     the end of the stream, not attempt to resume iteration.
 
-    Shares `generate()`'s stateless/stateful branching, rewrite, and persistence semantics
-    exactly (see `generate`'s docstring) -- only the delivery mechanism differs. Persistence
-    for a stateful request happens only after the full answer is assembled, immediately
-    before the `"done"` event, so a client disconnect (which raises `GeneratorExit` at the
-    suspended `yield`) or a mid-generation exception both skip it, leaving conversation
-    history exactly as it was before the request.
+    Shares `generate()`'s stateless/stateful branching, rewrite, ownership, and persistence
+    semantics exactly (see `generate`'s docstring) -- only the delivery mechanism differs.
+    Persistence for a stateful request happens only after the full answer is assembled,
+    immediately before the `"done"` event, so a client disconnect (which raises
+    `GeneratorExit` at the suspended `yield`) or a mid-generation exception both skip it,
+    leaving conversation history exactly as it was before the request.
     """
     try:
         settings = settings or get_generation_settings()
         if conversation_id is None:
-            chunks = retrieval_search(query, top_k, rerank=rerank, expand_sections=expand_sections)
+            chunks = retrieval_search(
+                query, top_k, owner_id, rerank=rerank, expand_sections=expand_sections
+            )
             if not chunks:
                 yield "citations", {"citations": []}
                 yield "token", {"text": NO_CONTEXT_ANSWER}
@@ -182,7 +192,9 @@ def generate_stream(
         else:
             rewritten_query = query
 
-        chunks = retrieval_search(rewritten_query, top_k, rerank=rerank, expand_sections=expand_sections)
+        chunks = retrieval_search(
+            rewritten_query, top_k, owner_id, rerank=rerank, expand_sections=expand_sections
+        )
         if not chunks:
             yield "citations", {"citations": []}
             yield "token", {"text": NO_CONTEXT_ANSWER}
@@ -200,7 +212,7 @@ def generate_stream(
             answer = "".join(answer_parts)
 
         with session_factory() as write_session:
-            get_or_create_conversation(write_session, conversation_id)
+            get_or_create_conversation(write_session, conversation_id, owner_id)
             append_message(write_session, conversation_id, "user", query)
             append_message(write_session, conversation_id, "assistant", answer)
             write_session.commit()
@@ -211,11 +223,17 @@ def generate_stream(
         yield "error", {"detail": "Generation query failed"}
 
 
-def get_conversation_history(conversation_id: uuid.UUID) -> ConversationHistoryResponse | None:
-    """Return every message in `conversation_id`, oldest first, or `None` if it doesn't exist."""
+def get_conversation_history(
+    conversation_id: uuid.UUID, owner_id: uuid.UUID
+) -> ConversationHistoryResponse | None:
+    """Return every message in `conversation_id`, oldest first.
+
+    Returns `None` if the conversation doesn't exist, or if it belongs to a different
+    `owner_id` -- the caller (router) maps both to a 404.
+    """
     session_factory = get_session_factory()
     with session_factory() as session:
-        if get_conversation(session, conversation_id) is None:
+        if get_conversation(session, conversation_id, owner_id) is None:
             return None
         records = get_all_messages(session, conversation_id)
 

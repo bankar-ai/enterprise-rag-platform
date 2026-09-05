@@ -1,7 +1,6 @@
 # tests/ingestion/test_router.py
 import io
 import time
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +9,7 @@ from app.embedding.client import OllamaEmbeddingClient
 from app.embedding.config import get_embedding_settings
 from app.ingestion.config import get_settings
 from app.main import app
+from tests.auth_helpers import register_and_login
 
 client = TestClient(app)
 _PDF_MAGIC = b"%PDF-"
@@ -17,11 +17,7 @@ _PDF_MAGIC = b"%PDF-"
 
 @pytest.fixture
 def auth_headers():
-    email = f"ingestion-test-{uuid.uuid4()}@example.com"
-    client.post("/auth/register", json={"email": email, "password": "a-long-enough-password"})
-    login_response = client.post("/auth/login", json={"email": email, "password": "a-long-enough-password"})
-    token = login_response.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    return register_and_login(client, "ingestion")
 
 
 @pytest.fixture(autouse=True)

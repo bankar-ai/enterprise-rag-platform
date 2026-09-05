@@ -1,5 +1,4 @@
 import time
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,16 +6,13 @@ from fastapi.testclient import TestClient
 from app.embedding.client import OllamaEmbeddingClient
 from app.embedding.config import get_embedding_settings
 from app.main import app
+from tests.auth_helpers import register_and_login
 
 client = TestClient(app)
 
 
 def _register_and_login(prefix: str) -> dict[str, str]:
-    email = f"{prefix}-{uuid.uuid4()}@example.com"
-    client.post("/auth/register", json={"email": email, "password": "a-long-enough-password"})
-    login_response = client.post("/auth/login", json={"email": email, "password": "a-long-enough-password"})
-    token = login_response.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    return register_and_login(client, prefix)
 
 
 @pytest.fixture

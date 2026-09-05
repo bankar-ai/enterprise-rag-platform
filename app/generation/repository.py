@@ -8,14 +8,16 @@ from sqlalchemy.orm import Session
 from app.generation.models import ConversationMessageRecord, ConversationRecord
 
 
-def get_or_create_conversation(session: Session, conversation_id: uuid.UUID) -> ConversationRecord:
-    """Return the `ConversationRecord` for `conversation_id`, creating it if it doesn't exist yet.
+def get_or_create_conversation(
+    session: Session, conversation_id: uuid.UUID, owner_id: uuid.UUID
+) -> ConversationRecord:
+    """Return `conversation_id`'s `ConversationRecord`, creating it (owned by `owner_id`) if new.
 
     Does not commit -- the caller controls the transaction boundary.
     """
     conversation = session.get(ConversationRecord, conversation_id)
     if conversation is None:
-        conversation = ConversationRecord(id=conversation_id)
+        conversation = ConversationRecord(id=conversation_id, owner_id=owner_id)
         session.add(conversation)
         session.flush()
     return conversation
@@ -49,12 +51,19 @@ def get_recent_messages(
     return list(reversed(rows))
 
 
-def get_conversation(session: Session, conversation_id: uuid.UUID) -> ConversationRecord | None:
-    """Return the `ConversationRecord` for `conversation_id`, or `None` if it doesn't exist.
+def get_conversation(
+    session: Session, conversation_id: uuid.UUID, owner_id: uuid.UUID
+) -> ConversationRecord | None:
+    """Return `conversation_id`'s `ConversationRecord` if it exists and belongs to `owner_id`.
 
-    Unlike `get_or_create_conversation`, never creates a row -- a plain lookup for read paths.
+    Returns `None` both when the conversation doesn't exist and when it belongs to a
+    different owner -- callers can't distinguish the two, matching the ingestion job
+    404 convention. Unlike `get_or_create_conversation`, never creates a row.
     """
-    return session.get(ConversationRecord, conversation_id)
+    conversation = session.get(ConversationRecord, conversation_id)
+    if conversation is None or conversation.owner_id != owner_id:
+        return None
+    return conversation
 
 
 def get_all_messages(session: Session, conversation_id: uuid.UUID) -> list[ConversationMessageRecord]:

@@ -6,9 +6,11 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.auth.dependencies import get_current_user
+from app.auth.schemas import CurrentUser
 from app.generation.schemas import ConversationHistoryResponse, GenerationQuery, GenerationResponse
 from app.generation.service import generate, generate_stream, get_conversation_history
 
@@ -19,12 +21,15 @@ conversations_router = APIRouter(prefix="/conversations", tags=["conversations"]
 
 
 @router.post("/query")
-def query(query_request: GenerationQuery) -> GenerationResponse:
+def query(
+    query_request: GenerationQuery, current_user: CurrentUser = Depends(get_current_user)
+) -> GenerationResponse:
     """Run retrieval + LLM synthesis and return a grounded, cited answer."""
     try:
         return generate(
             query_request.query,
             query_request.top_k,
+            current_user.id,
             rerank=query_request.rerank,
             expand_sections=query_request.expand_sections,
             conversation_id=query_request.conversation_id,
@@ -38,10 +43,11 @@ def _format_sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _event_stream(query_request: GenerationQuery) -> Iterator[str]:
+def _event_stream(query_request: GenerationQuery, owner_id: uuid.UUID) -> Iterator[str]:
     for event, data in generate_stream(
         query_request.query,
         query_request.top_k,
+        owner_id,
         rerank=query_request.rerank,
         expand_sections=query_request.expand_sections,
         conversation_id=query_request.conversation_id,
@@ -50,7 +56,9 @@ def _event_stream(query_request: GenerationQuery) -> Iterator[str]:
 
 
 @router.post("/query/stream")
-def query_stream(query_request: GenerationQuery) -> StreamingResponse:
+def query_stream(
+    query_request: GenerationQuery, current_user: CurrentUser = Depends(get_current_user)
+) -> StreamingResponse:
     """Run retrieval + LLM synthesis, streaming the answer as Server-Sent Events.
 
     Unlike `POST /generation/query`, failures surface as a terminal `error` SSE event
@@ -58,16 +66,18 @@ def query_stream(query_request: GenerationQuery) -> StreamingResponse:
     an HTTP error status -- see `generate_stream`'s docstring.
     """
     return StreamingResponse(
-        _event_stream(query_request),
+        _event_stream(query_request, current_user.id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
 @conversations_router.get("/{conversation_id}")
-def get_conversation(conversation_id: uuid.UUID) -> ConversationHistoryResponse:
-    """Return a conversation's full message history, oldest first, or 404 if unknown."""
-    history = get_conversation_history(conversation_id)
+def get_conversation(
+    conversation_id: uuid.UUID, current_user: CurrentUser = Depends(get_current_user)
+) -> ConversationHistoryResponse:
+    """Return a conversation's full message history, oldest first, or 404 if unknown or not yours."""
+    history = get_conversation_history(conversation_id, current_user.id)
     if history is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return history
