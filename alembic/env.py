@@ -7,6 +7,7 @@ from alembic import context
 from app.core.config import get_database_settings
 from app.ingestion.models import Base
 import app.generation.models  # noqa: F401  -- registers ConversationRecord/ConversationMessageRecord on Base.metadata
+import app.auth.models  # noqa: F401  -- registers UserRecord/RefreshTokenRecord on Base.metadata
 
 target_metadata = Base.metadata
 

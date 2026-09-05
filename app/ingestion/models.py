@@ -1,9 +1,10 @@
 """SQLAlchemy ORM models for persisted documents and chunks."""
 
+import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Computed, ForeignKey, Identity, Text
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy import DDL, JSON, ForeignKey, Identity, Index, Text, event
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -19,6 +20,7 @@ class DocumentRecord(Base):
 
     document_id: Mapped[str] = mapped_column(primary_key=True)
     filename: Mapped[str]
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
@@ -42,6 +44,36 @@ class ChunkRecord(Base):
     parser_used: Mapped[str]
     source_filename: Mapped[str]
     vector_id: Mapped[int] = mapped_column(Identity(always=True), unique=True)
-    search_vector: Mapped[str | None] = mapped_column(
-        TSVECTOR, Computed("to_tsvector('english', text)", persisted=True)
-    )
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR)
+
+    __table_args__ = (Index("ix_chunks_search_vector", "search_vector", postgresql_using="gin"),)
+
+
+# `search_vector` is kept in sync by a Postgres trigger rather than `Computed(...)` (see
+# alembic/versions/ec9863a88014_*.py for why) so `Base.metadata.create_all` -- used by the test
+# suite -- must create the same trigger to reproduce production's auto-populate behavior.
+event.listen(
+    ChunkRecord.__table__,
+    "after_create",
+    DDL(  # type: ignore[no-untyped-call]
+        """
+        CREATE OR REPLACE FUNCTION chunks_search_vector_update() RETURNS trigger AS $$
+        BEGIN
+            NEW.search_vector := to_tsvector('english', NEW.text);
+            RETURN NEW;
+        END
+        $$ LANGUAGE plpgsql;
+        """
+    ),
+)
+event.listen(
+    ChunkRecord.__table__,
+    "after_create",
+    DDL(  # type: ignore[no-untyped-call]
+        """
+        CREATE TRIGGER chunks_search_vector_trigger
+        BEFORE INSERT OR UPDATE OF text ON chunks
+        FOR EACH ROW EXECUTE FUNCTION chunks_search_vector_update();
+        """
+    ),
+)

@@ -7,6 +7,7 @@ over score-normalization-based fusion.
 
 import hashlib
 import logging
+import uuid
 
 from sqlalchemy.orm import Session
 
@@ -14,7 +15,12 @@ from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
-from app.ingestion.repository import get_chunks_by_vector_ids, get_sibling_chunks, search_chunks_by_text
+from app.ingestion.repository import (
+    filter_vector_ids_by_owner,
+    get_chunks_by_vector_ids,
+    get_sibling_chunks,
+    search_chunks_by_text,
+)
 from app.retrieval.cache import RetrievalCache, get_default_retrieval_cache
 from app.retrieval.config import get_reranker_settings
 from app.retrieval.reranker import FlashRankReranker, Reranker
@@ -55,14 +61,20 @@ def _reciprocal_rank_fusion(*ranked_id_lists: list[int], k: int = RRF_K) -> list
     return sorted(normalized, key=lambda pair: pair[1], reverse=True)
 
 
-def _cache_key(query: str, top_k: int, rerank: bool, expand_sections: bool) -> str:
-    """Hash the four `search()` parameters that determine its output, for cache lookups."""
+def _cache_key(query: str, top_k: int, rerank: bool, expand_sections: bool, owner_id: uuid.UUID) -> str:
+    """Hash the parameters that determine `search()`'s output, for cache lookups.
+
+    `owner_id` is part of the key -- without it, one user's cached results could leak to
+    another user issuing the same query text.
+    """
     query_bytes = query.encode()
+    owner_bytes = str(owner_id).encode()
     payload = (
         len(query_bytes).to_bytes(4, "big")
         + query_bytes
         + top_k.to_bytes(4, "big")
         + bytes([rerank, expand_sections])
+        + owner_bytes
     )
     return hashlib.sha256(payload).hexdigest()
 
@@ -104,6 +116,7 @@ def _expand_sections(session: Session, results: list[RetrievedChunk]) -> list[Re
 def search(
     query: str,
     top_k: int,
+    owner_id: uuid.UUID,
     settings: EmbeddingSettings | None = None,
     embedding_client: EmbeddingClient | None = None,
     faiss_index: FaissIndex | None = None,
@@ -112,27 +125,36 @@ def search(
     expand_sections: bool = False,
     cache: RetrievalCache | None = None,
 ) -> list[RetrievedChunk]:
-    """Run hybrid (vector + BM25) search and return up to `top_k` chunks, fused-score order.
+    """Run hybrid (vector + BM25) search restricted to `owner_id`'s documents.
 
-    `embedding_client`/`faiss_index`/`settings` are injectable for testing; default to
-    Ollama/local-disk implementations built from `settings` (or the process-wide cached
-    `EmbeddingSettings` if `settings` is not given).
+    Returns up to `top_k` chunks, fused-score order. `embedding_client`/`faiss_index`/
+    `settings` are injectable for testing; default to Ollama/local-disk implementations
+    built from `settings` (or the process-wide cached `EmbeddingSettings` if `settings` is
+    not given).
 
-    If `rerank` is true, the fused+hydrated results are re-scored and reordered by `reranker`
-    (a `FlashRankReranker` built from the process-wide `RerankerSettings` if none is injected)
-    before being returned. If `rerank` is false (the default), `reranker` is never constructed
-    or invoked, so opting out costs nothing.
+    If `rerank` is true, the fused+hydrated results are re-scored and reordered by
+    `reranker` (a `FlashRankReranker` built from the process-wide `RerankerSettings` if none
+    is injected) before being returned. If `rerank` is false (the default), `reranker` is
+    never constructed or invoked, so opting out costs nothing.
 
     If `expand_sections` is true, the (possibly reranked) results are expanded with each
-    result's section-siblings (see `_expand_sections`) -- the returned list may then be longer
-    than `top_k`; this is intended, not a bug.
+    result's section-siblings (see `_expand_sections`) -- the returned list may then be
+    longer than `top_k`; this is intended, not a bug.
 
-    `cache` is an injectable `RetrievalCache` (defaulting to `RedisRetrievalCache`); the full
-    result of this function, keyed by (`query`, `top_k`, `rerank`, `expand_sections`), is
-    cache-aside -- a hit returns immediately without running any of the pipeline below.
+    `cache` is an injectable `RetrievalCache` (defaulting to `RedisRetrievalCache`); the
+    full result of this function, keyed by (`query`, `top_k`, `rerank`, `expand_sections`,
+    `owner_id`), is cache-aside -- a hit returns immediately without running any of the
+    pipeline below.
+
+    Isolation is enforced via oversample-then-filter: FAISS and BM25 candidates are still
+    drawn from the full shared index/table (not per-user partitioned), then filtered to
+    `owner_id`'s documents during Postgres hydration. This is correct at today's scale but
+    can degrade recall once a single user's chunks are a small fraction of a large shared
+    index -- see the design spec's Future Follow-ups for the deferred partitioned-index
+    alternative.
     """
     cache = cache or get_default_retrieval_cache()
-    cache_key = _cache_key(query, top_k, rerank, expand_sections)
+    cache_key = _cache_key(query, top_k, rerank, expand_sections, owner_id)
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
@@ -151,7 +173,14 @@ def search(
 
     session_factory = get_session_factory()
     with session_factory() as session:
-        bm25_hits = search_chunks_by_text(session, query, candidate_k)
+        # Restrict FAISS's (owner-blind) candidates to owner_id's own documents BEFORE
+        # fusion truncates to top_k -- otherwise another owner's higher-ranked vector hits
+        # can consume result slots that should have gone to the caller's own matches. Order
+        # is preserved (best-first) since RRF's rank contribution depends on list position.
+        owned_vector_ids = set(filter_vector_ids_by_owner(session, vector_ranked_ids, owner_id))
+        vector_ranked_ids = [vid for vid in vector_ranked_ids if vid in owned_vector_ids]
+
+        bm25_hits = search_chunks_by_text(session, query, candidate_k, owner_id)
         bm25_ranked_ids = [vector_id for vector_id, _ in bm25_hits]
 
         fused = _reciprocal_rank_fusion(vector_ranked_ids, bm25_ranked_ids)[:top_k]
@@ -159,7 +188,9 @@ def search(
             cache.set(cache_key, [])
             return []
 
-        chunks_by_vector_id = get_chunks_by_vector_ids(session, [vector_id for vector_id, _ in fused])
+        chunks_by_vector_id = get_chunks_by_vector_ids(
+            session, [vector_id for vector_id, _ in fused], owner_id
+        )
         results = []
         for vector_id, score in fused:
             chunk = chunks_by_vector_id.get(vector_id)
