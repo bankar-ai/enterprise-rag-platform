@@ -342,9 +342,9 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'app.auth.security'`
 import uuid
 from typing import Literal
 
-Role = Literal["admin", "user"]
+from pydantic import BaseModel
 
-from pydantic import BaseModel  # noqa: E402
+Role = Literal["admin", "user"]
 
 
 class CurrentUser(BaseModel):
