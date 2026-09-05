@@ -4,6 +4,7 @@ from typing import Protocol
 
 import ollama
 
+from app.core.telemetry import get_tracer
 from app.embedding.cache import EmbeddingCache, get_default_embedding_cache
 from app.embedding.config import EmbeddingSettings
 
@@ -38,18 +39,21 @@ class OllamaEmbeddingClient:
         Each text is looked up in the cache first; only cache misses are sent to Ollama,
         in a single batched call, and their results are written back to the cache.
         """
-        if not texts:
-            return []
+        with get_tracer().start_as_current_span("embedding.generate") as span:
+            span.set_attribute("embedding.batch_size", len(texts))
+            if not texts:
+                return []
 
-        vectors: list[list[float] | None] = [self._cache.get(self._model, text) for text in texts]
-        miss_indices = [i for i, vector in enumerate(vectors) if vector is None]
+            vectors: list[list[float] | None] = [self._cache.get(self._model, text) for text in texts]
+            miss_indices = [i for i, vector in enumerate(vectors) if vector is None]
+            span.set_attribute("embedding.cache_misses", len(miss_indices))
 
-        if miss_indices:
-            miss_texts = [texts[i] for i in miss_indices]
-            response = self._client.embed(model=self._model, input=miss_texts)
-            new_vectors = list(response["embeddings"])
-            for i, vector in zip(miss_indices, new_vectors, strict=True):
-                vectors[i] = vector
-                self._cache.set(self._model, texts[i], vector)
+            if miss_indices:
+                miss_texts = [texts[i] for i in miss_indices]
+                response = self._client.embed(model=self._model, input=miss_texts)
+                new_vectors = list(response["embeddings"])
+                for i, vector in zip(miss_indices, new_vectors, strict=True):
+                    vectors[i] = vector
+                    self._cache.set(self._model, texts[i], vector)
 
-        return [vector for vector in vectors if vector is not None]
+            return [vector for vector in vectors if vector is not None]
