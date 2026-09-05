@@ -45,6 +45,7 @@ class UserResponse(BaseModel):
     id: uuid.UUID
     email: str
     role: Role
+    is_active: bool
 
 
 class LoginRequest(BaseModel):
@@ -74,3 +75,9 @@ class LogoutRequest(BaseModel):
     """A refresh-token revocation request."""
 
     refresh_token: str
+
+
+class UpdateUserActiveRequest(BaseModel):
+    """An admin request to enable or disable a user account."""
+
+    is_active: bool

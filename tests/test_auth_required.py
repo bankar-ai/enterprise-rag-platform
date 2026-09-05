@@ -48,6 +48,18 @@ def _call_get_conversation():
     return client.get(f"/conversations/{_DUMMY_CONVERSATION_ID}")
 
 
+def _call_admin_list_users():
+    return client.get("/admin/users")
+
+
+def _call_admin_update_user():
+    return client.patch(f"/admin/users/{_DUMMY_CONVERSATION_ID}", json={"is_active": False})
+
+
+def _call_admin_revoke_sessions():
+    return client.post(f"/admin/users/{_DUMMY_CONVERSATION_ID}/revoke-sessions")
+
+
 _PROTECTED_ROUTES = [
     pytest.param(_call_ingestion_pdf, id="POST /ingestion/pdf"),
     pytest.param(_call_ingestion_job_status, id="GET /ingestion/jobs/{job_id}"),
@@ -55,6 +67,9 @@ _PROTECTED_ROUTES = [
     pytest.param(_call_generation_query, id="POST /generation/query"),
     pytest.param(_call_generation_query_stream, id="POST /generation/query/stream"),
     pytest.param(_call_get_conversation, id="GET /conversations/{id}"),
+    pytest.param(_call_admin_list_users, id="GET /admin/users"),
+    pytest.param(_call_admin_update_user, id="PATCH /admin/users/{user_id}"),
+    pytest.param(_call_admin_revoke_sessions, id="POST /admin/users/{user_id}/revoke-sessions"),
 ]
 
 

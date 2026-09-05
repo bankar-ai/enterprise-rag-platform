@@ -20,6 +20,7 @@ class UserRecord(Base):
     email: Mapped[str] = mapped_column(unique=True, index=True)
     hashed_password: Mapped[str]
     role: Mapped[str] = mapped_column(default="user")
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 

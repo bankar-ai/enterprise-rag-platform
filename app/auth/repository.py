@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.auth.models import RefreshTokenRecord, UserRecord
@@ -12,6 +12,32 @@ from app.auth.models import RefreshTokenRecord, UserRecord
 def get_user_by_email(session: Session, email: str) -> UserRecord | None:
     """Return the user with `email`, or `None` if none exists."""
     return session.scalars(select(UserRecord).where(UserRecord.email == email)).first()
+
+
+def get_user_by_id(session: Session, user_id: uuid.UUID) -> UserRecord | None:
+    """Return the user with `user_id`, or `None` if none exists."""
+    return session.get(UserRecord, user_id)
+
+
+def list_users(session: Session) -> list[UserRecord]:
+    """Return all users, ordered by creation time."""
+    return list(session.scalars(select(UserRecord).order_by(UserRecord.created_at)))
+
+
+def set_user_active(session: Session, user: UserRecord, is_active: bool) -> None:
+    """Set `user.is_active`. Does not commit."""
+    user.is_active = is_active
+    session.flush()
+
+
+def revoke_all_refresh_tokens_for_user(session: Session, user_id: uuid.UUID) -> None:
+    """Mark every non-revoked refresh token belonging to `user_id` as revoked. Does not commit."""
+    now = datetime.now(timezone.utc)
+    session.execute(
+        update(RefreshTokenRecord)
+        .where(RefreshTokenRecord.user_id == user_id, RefreshTokenRecord.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
 
 
 def create_user(
