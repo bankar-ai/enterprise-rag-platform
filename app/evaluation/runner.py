@@ -5,6 +5,7 @@ results, persists a summary, and cleans up.
 """
 
 import os
+import shutil
 import tempfile
 import uuid
 
@@ -12,7 +13,7 @@ from app.auth.repository import create_user
 from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient
 from app.embedding.config import get_embedding_settings
-from app.embedding.index import FaissIndex
+from app.embedding.index import OwnerFaissIndexStore
 from app.embedding.service import embed_and_persist
 from app.evaluation.dataset import GOLDEN_DOCUMENTS, GOLDEN_QUERIES
 from app.evaluation.metrics import precision_at_k, recall_at_k, reciprocal_rank
@@ -25,22 +26,20 @@ from app.retrieval.service import search
 def run_evaluation(
     top_k: int = 3,
     embedding_client: EmbeddingClient | None = None,
-    faiss_index: FaissIndex | None = None,
+    faiss_index_store: OwnerFaissIndexStore | None = None,
 ) -> EvaluationSummary:
     """Run the golden dataset through the real search pipeline and return a scored summary.
 
-    Always uses a dedicated temp-file-backed FAISS index when `faiss_index` isn't injected,
-    never the real app's persisted index -- running this must never pollute or depend on a
-    developer's local index. Persists the resulting summary to Postgres and deletes every
-    other row it created (the eval user, its documents, its chunks) before returning -- the
-    persisted summary row is the only durable trace of having run this.
+    Always uses a dedicated temp-dir-backed `OwnerFaissIndexStore` when `faiss_index_store`
+    isn't injected, never the real app's persisted index -- running this must never pollute
+    or depend on a developer's local index. Persists the resulting summary to Postgres and
+    deletes every other row it created (the eval user, its documents, its chunks) before
+    returning -- the persisted summary row is the only durable trace of having run this.
     """
-    owned_temp_index_path: str | None = None
-    if faiss_index is None:
-        # A path, not a pre-created file: FaissIndex treats an existing-but-empty file as a
-        # corrupt index and fails to read it, so the path must not exist yet.
-        owned_temp_index_path = f"{tempfile.gettempdir()}/eval-{uuid.uuid4().hex}.index"
-        faiss_index = FaissIndex(owned_temp_index_path, get_embedding_settings().dimension)
+    owned_temp_index_dir: str | None = None
+    if faiss_index_store is None:
+        owned_temp_index_dir = f"{tempfile.gettempdir()}/eval-{uuid.uuid4().hex}"
+        faiss_index_store = OwnerFaissIndexStore(owned_temp_index_dir, get_embedding_settings().dimension)
 
     session_factory = get_session_factory()
     with session_factory() as session:
@@ -75,7 +74,7 @@ def run_evaluation(
             chunks=chunks,
             owner_id=owner_id,
             embedding_client=embedding_client,
-            faiss_index=faiss_index,
+            faiss_index_store=faiss_index_store,
         )
 
     per_query: list[QueryResult] = []
@@ -88,7 +87,7 @@ def run_evaluation(
             top_k=top_k,
             owner_id=owner_id,
             embedding_client=embedding_client,
-            faiss_index=faiss_index,
+            faiss_index_store=faiss_index_store,
         )
         retrieved_ids = [chunk.chunk_id for chunk in results]
 
@@ -117,7 +116,7 @@ def run_evaluation(
         cleanup_eval_data(session, all_document_ids, owner_id)
         session.commit()
 
-    if owned_temp_index_path is not None and os.path.exists(owned_temp_index_path):
-        os.remove(owned_temp_index_path)
+    if owned_temp_index_dir is not None and os.path.exists(owned_temp_index_dir):
+        shutil.rmtree(owned_temp_index_dir)
 
     return summary

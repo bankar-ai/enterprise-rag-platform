@@ -2,7 +2,7 @@
 import uuid
 
 from app.core.db import get_session_factory
-from app.embedding.index import FaissIndex
+from app.embedding.index import OwnerFaissIndexStore
 from app.ingestion.config import IngestionSettings
 from app.ingestion.jobs import create_job, get_job, run_ingestion_job
 from app.ingestion.models import ChunkRecord
@@ -54,7 +54,7 @@ def test_run_ingestion_job_marks_done_on_success(simple_text_pdf, tmp_path):
         _settings(),
         _TEST_OWNER_ID,
         embedding_client=_FakeEmbeddingClient(),
-        faiss_index=FaissIndex(str(tmp_path / "index.bin"), dimension=4),
+        faiss_index_store=OwnerFaissIndexStore(str(tmp_path), dimension=4),
     )
 
     record = get_job(job_id)
@@ -89,7 +89,7 @@ def test_run_ingestion_job_persists_chunks_and_vectors(simple_text_pdf, tmp_path
         session.commit()
 
     job_id = create_job(_TEST_OWNER_ID)
-    faiss_index = FaissIndex(str(tmp_path / "index.bin"), dimension=4)
+    faiss_index_store = OwnerFaissIndexStore(str(tmp_path), dimension=4)
 
     run_ingestion_job(
         job_id,
@@ -98,14 +98,15 @@ def test_run_ingestion_job_persists_chunks_and_vectors(simple_text_pdf, tmp_path
         _settings(),
         _TEST_OWNER_ID,
         embedding_client=_FakeEmbeddingClient(),
-        faiss_index=faiss_index,
+        faiss_index_store=faiss_index_store,
     )
 
     record = get_job(job_id)
     assert record.status == JobStatus.DONE
     document_id = record.result.document_id
 
-    assert faiss_index.ntotal == len(record.result.chunks)
+    hits = faiss_index_store.search(_TEST_OWNER_ID, [0.1] * 4, k=1000)
+    assert len(hits) == len(record.result.chunks)
 
     session_factory = get_session_factory()
     with session_factory() as session:
@@ -126,7 +127,7 @@ def test_run_ingestion_job_marks_failed_if_persistence_fails(simple_text_pdf, tm
         _settings(),
         _TEST_OWNER_ID,
         embedding_client=_BrokenEmbeddingClient(),
-        faiss_index=FaissIndex(str(tmp_path / "index.bin"), dimension=4),
+        faiss_index_store=OwnerFaissIndexStore(str(tmp_path), dimension=4),
     )
 
     record = get_job(job_id)

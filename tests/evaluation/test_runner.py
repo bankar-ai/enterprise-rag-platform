@@ -1,7 +1,7 @@
 import os
 
 from app.core.db import get_session_factory
-from app.embedding.index import FaissIndex
+from app.embedding.index import OwnerFaissIndexStore
 from app.evaluation.dataset import GOLDEN_DOCUMENTS, GOLDEN_QUERIES
 from app.evaluation.models import EvaluationRunRecord
 from app.evaluation.runner import run_evaluation
@@ -32,10 +32,12 @@ class _DiscriminatingFakeEmbeddingClient:
 
 
 def test_run_evaluation_persists_a_summary_row_and_cleans_up_transient_data(tmp_path):
-    faiss_index = FaissIndex(str(tmp_path / "eval.index"), dimension=32)
+    faiss_index_store = OwnerFaissIndexStore(str(tmp_path), dimension=32)
     embedding_client = _DiscriminatingFakeEmbeddingClient()
 
-    summary = run_evaluation(top_k=3, embedding_client=embedding_client, faiss_index=faiss_index)
+    summary = run_evaluation(
+        top_k=3, embedding_client=embedding_client, faiss_index_store=faiss_index_store
+    )
 
     assert summary.num_queries == len(GOLDEN_QUERIES)
     assert summary.mean_precision > 0.0
@@ -54,10 +56,11 @@ def test_run_evaluation_persists_a_summary_row_and_cleans_up_transient_data(tmp_
 
 
 def test_run_evaluation_builds_and_removes_its_own_temp_faiss_index_when_none_injected(monkeypatch):
-    """The runner builds its own temp-file-backed index and deletes it afterward.
+    """The runner builds its own temp-dir-backed store and deletes it afterward.
 
-    When `faiss_index` isn't injected, it must never use the real app's persisted one, and
-    it must not leave leftover index files accumulating in the OS temp dir across runs.
+    When `faiss_index_store` isn't injected, it must never use the real app's persisted
+    one, and it must not leave leftover index directories accumulating in the OS temp dir
+    across runs.
     """
     embedding_client = _DiscriminatingFakeEmbeddingClient()
     monkeypatch.setattr(
@@ -65,17 +68,17 @@ def test_run_evaluation_builds_and_removes_its_own_temp_faiss_index_when_none_in
         lambda: type("S", (), {"dimension": 32})(),
     )
 
-    created_paths: list[str] = []
-    from app.embedding.index import FaissIndex as RealFaissIndex
+    created_dirs: list[str] = []
+    from app.embedding.index import OwnerFaissIndexStore as RealOwnerFaissIndexStore
 
-    class _TrackingFaissIndex(RealFaissIndex):
-        def __init__(self, path, dimension):
-            created_paths.append(path)
-            super().__init__(path, dimension)
+    class _TrackingOwnerFaissIndexStore(RealOwnerFaissIndexStore):
+        def __init__(self, index_dir, dimension):
+            created_dirs.append(index_dir)
+            super().__init__(index_dir, dimension)
 
-    monkeypatch.setattr("app.evaluation.runner.FaissIndex", _TrackingFaissIndex)
+    monkeypatch.setattr("app.evaluation.runner.OwnerFaissIndexStore", _TrackingOwnerFaissIndexStore)
 
     run_evaluation(top_k=3, embedding_client=embedding_client)
 
-    assert len(created_paths) == 1
-    assert not os.path.exists(created_paths[0])
+    assert len(created_dirs) == 1
+    assert not os.path.exists(created_dirs[0])
