@@ -5,8 +5,8 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.auth.models import UserRecord
-from app.evaluation.models import EvaluationRunRecord
-from app.evaluation.schemas import EvaluationSummary
+from app.evaluation.models import EvaluationRunRecord, GenerationEvaluationRunRecord
+from app.evaluation.schemas import EvaluationSummary, GenerationEvaluationSummary
 from app.ingestion.models import ChunkRecord, DocumentRecord
 
 
@@ -18,6 +18,23 @@ def save_evaluation_run(session: Session, summary: EvaluationSummary) -> Evaluat
         mean_precision_at_k=summary.mean_precision,
         mean_recall_at_k=summary.mean_recall,
         mrr=summary.mrr,
+        details=[result.model_dump() for result in summary.per_query],
+    )
+    session.add(record)
+    session.flush()
+    return record
+
+
+def save_generation_evaluation_run(
+    session: Session, summary: GenerationEvaluationSummary
+) -> GenerationEvaluationRunRecord:
+    """Persist `summary` as a new `GenerationEvaluationRunRecord`. Does not commit."""
+    record = GenerationEvaluationRunRecord(
+        judge=summary.judge,
+        num_queries=summary.num_queries,
+        mean_faithfulness=summary.mean_faithfulness,
+        mean_answer_relevancy=summary.mean_answer_relevancy,
+        mean_context_precision=summary.mean_context_precision,
         details=[result.model_dump() for result in summary.per_query],
     )
     session.add(record)

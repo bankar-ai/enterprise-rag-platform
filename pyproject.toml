@@ -11,6 +11,7 @@ dependencies = [
     "faiss-cpu>=1.15.0",
     "fastapi>=0.141.1",
     "flashrank>=0.2.10",
+    "langchain-ollama>=1.1.0",
     "langchain-text-splitters>=1.1.2",
     "ollama>=0.6.2",
     "opentelemetry-exporter-otlp>=1.44.0",
@@ -26,6 +27,7 @@ dependencies = [
     "pyjwt>=2.13.0",
     "pymupdf4llm>=1.28.0",
     "python-multipart>=0.0.32",
+    "ragas==0.3.9",
     "redis>=8.1.0",
     "sqlalchemy>=2.0.51",
     "uvicorn>=0.52.0",
@@ -41,6 +43,14 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.16.1",
 ]
+
+[tool.uv]
+# ragas 0.3.9/0.4.3 both unconditionally import a langchain_community submodule
+# (chat_models.vertexai) that was removed in langchain-community>=0.4 -- an upstream ragas bug
+# (see github.com/explodinggradients/ragas issues #2741/#2745/#2753), unrelated to which LLM
+# backend we actually use (Ollama). This is a transitive-only compatibility pin: our code never
+# imports langchain_community directly, so it's a uv constraint, not a project dependency.
+constraint-dependencies = ["langchain-community<0.4"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
