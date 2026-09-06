@@ -6,6 +6,8 @@ from typing import cast
 import faiss
 import numpy as np
 
+from app.core.telemetry import get_tracer
+
 
 class FaissIndex:
     """A flat L2 FAISS index, addressable by explicit int64 IDs, persisted to `path`."""
@@ -48,12 +50,17 @@ class FaissIndex:
         returns when the index has fewer than `k` vectors (`vector_id == -1`) are
         dropped.
         """
-        if self._index.ntotal == 0 or k <= 0:
-            return []
-        query = np.array([vector], dtype="float32")
-        distances, ids = self._index.search(query, k)
-        return [
-            (int(vector_id), float(distance))
-            for vector_id, distance in zip(ids[0], distances[0], strict=True)
-            if vector_id != -1
-        ]
+        with get_tracer().start_as_current_span("faiss.search") as span:
+            span.set_attribute("faiss.k", k)
+            if self._index.ntotal == 0 or k <= 0:
+                span.set_attribute("faiss.hits", 0)
+                return []
+            query = np.array([vector], dtype="float32")
+            distances, ids = self._index.search(query, k)
+            hits = [
+                (int(vector_id), float(distance))
+                for vector_id, distance in zip(ids[0], distances[0], strict=True)
+                if vector_id != -1
+            ]
+            span.set_attribute("faiss.hits", len(hits))
+            return hits

@@ -1,0 +1,50 @@
+{
+  "title": "Enterprise RAG Platform",
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(http_server_duration_milliseconds_count[5m])) by (http_target)"}]
+    },
+    {
+      "id": 2,
+      "title": "p95 request latency (ms)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(http_server_duration_milliseconds_bucket[5m])) by (le, http_target))"}]
+    },
+    {
+      "id": 3,
+      "title": "Embedding cache hit rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "sum(rate(embedding_cache_requests_total{result=\"hit\"}[5m])) / sum(rate(embedding_cache_requests_total[5m]))"}]
+    },
+    {
+      "id": 4,
+      "title": "Retrieval cache hit rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [{"expr": "sum(rate(retrieval_cache_requests_total{result=\"hit\"}[5m])) / sum(rate(retrieval_cache_requests_total[5m]))"}]
+    },
+    {
+      "id": 5,
+      "title": "LLM generation duration (p95)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(llm_generation_duration_seconds_bucket[5m])) by (le))"}]
+    },
+    {
+      "id": 6,
+      "title": "Ingestion jobs by outcome",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "targets": [{"expr": "sum(rate(ingestion_jobs_total[5m])) by (status)"}]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

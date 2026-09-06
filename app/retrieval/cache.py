@@ -11,12 +11,18 @@ from typing import Protocol
 import redis
 from pydantic import TypeAdapter
 
+from app.core.telemetry import get_meter
 from app.retrieval.config import RetrievalSettings, get_retrieval_settings
 from app.retrieval.schemas import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
 _results_adapter = TypeAdapter(list[RetrievedChunk])
+
+_meter = get_meter()
+_cache_requests_counter = _meter.create_counter(
+    "retrieval_cache_requests_total", description="Retrieval cache lookups by result"
+)
 
 
 class RetrievalCache(Protocol):
@@ -54,14 +60,19 @@ class RedisRetrievalCache:
             raw = self._client.get(self._key(cache_key))
         except redis.RedisError:
             logger.exception("Redis GET failed; treating as a cache miss")
+            _cache_requests_counter.add(1, {"result": "miss"})
             return None
         if raw is None:
+            _cache_requests_counter.add(1, {"result": "miss"})
             return None
         try:
-            return _results_adapter.validate_json(raw)
+            results = _results_adapter.validate_json(raw)
         except (ValueError, UnicodeDecodeError):
             logger.exception("Failed to deserialize cached retrieval result; treating as a cache miss")
+            _cache_requests_counter.add(1, {"result": "miss"})
             return None
+        _cache_requests_counter.add(1, {"result": "hit"})
+        return results
 
     def set(self, cache_key: str, results: list[RetrievedChunk]) -> None:
         """Cache `results` for `cache_key` with the configured TTL. No-op on Redis error."""
