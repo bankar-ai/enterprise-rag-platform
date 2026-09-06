@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session_factory
+from app.core.telemetry import get_tracer
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 from app.embedding.index import FaissIndex
@@ -183,7 +184,9 @@ def search(
         bm25_hits = search_chunks_by_text(session, query, candidate_k, owner_id)
         bm25_ranked_ids = [vector_id for vector_id, _ in bm25_hits]
 
-        fused = _reciprocal_rank_fusion(vector_ranked_ids, bm25_ranked_ids)[:top_k]
+        with get_tracer().start_as_current_span("retrieval.fuse") as span:
+            fused = _reciprocal_rank_fusion(vector_ranked_ids, bm25_ranked_ids)[:top_k]
+            span.set_attribute("retrieval.fused_count", len(fused))
         if not fused:
             cache.set(cache_key, [])
             return []
@@ -211,11 +214,15 @@ def search(
             )
 
         if rerank:
-            reranker = reranker or FlashRankReranker(get_reranker_settings())
-            results = reranker.rerank(query, results)
+            with get_tracer().start_as_current_span("retrieval.rerank") as span:
+                reranker = reranker or FlashRankReranker(get_reranker_settings())
+                results = reranker.rerank(query, results)
+                span.set_attribute("retrieval.reranked_count", len(results))
 
         if expand_sections:
-            results = _expand_sections(session, results)
+            with get_tracer().start_as_current_span("retrieval.expand_sections") as span:
+                results = _expand_sections(session, results)
+                span.set_attribute("retrieval.expanded_count", len(results))
 
         cache.set(cache_key, results)
         return results

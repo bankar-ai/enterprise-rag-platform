@@ -12,9 +12,15 @@ from typing import Protocol
 
 import redis
 
+from app.core.telemetry import get_meter
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
 
 logger = logging.getLogger(__name__)
+
+_meter = get_meter()
+_cache_requests_counter = _meter.create_counter(
+    "embedding_cache_requests_total", description="Embedding cache lookups by result"
+)
 
 
 class EmbeddingCache(Protocol):
@@ -56,14 +62,18 @@ class RedisEmbeddingCache:
             raw = self._client.get(self._key(model, text))
         except redis.RedisError:
             logger.exception("Redis GET failed; treating as a cache miss")
+            _cache_requests_counter.add(1, {"result": "miss"})
             return None
         if raw is None:
+            _cache_requests_counter.add(1, {"result": "miss"})
             return None
         try:
             vector: list[float] = json.loads(raw)
         except (ValueError, UnicodeDecodeError):
             logger.exception("Failed to deserialize cached embedding vector; treating as a cache miss")
+            _cache_requests_counter.add(1, {"result": "miss"})
             return None
+        _cache_requests_counter.add(1, {"result": "hit"})
         return vector
 
     def set(self, model: str, text: str, vector: list[float]) -> None:

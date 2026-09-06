@@ -4,6 +4,7 @@ import logging
 import threading
 import uuid
 
+from app.core.telemetry import get_meter
 from app.embedding.client import EmbeddingClient
 from app.embedding.index import FaissIndex
 from app.embedding.service import embed_and_persist
@@ -12,6 +13,10 @@ from app.ingestion.schemas import IngestResponse, JobStatus
 from app.ingestion.service import ingest_pdf
 
 logger = logging.getLogger(__name__)
+
+_jobs_counter = get_meter().create_counter(
+    "ingestion_jobs_total", description="Completed ingestion jobs by outcome"
+)
 
 _jobs: dict[str, "JobRecord"] = {}
 _lock = threading.Lock()
@@ -75,8 +80,10 @@ def run_ingestion_job(
         with _lock:
             _jobs[job_id].status = JobStatus.FAILED
             _jobs[job_id].error = str(exc)
+        _jobs_counter.add(1, {"status": "failed"})
         return
 
     with _lock:
         _jobs[job_id].status = JobStatus.DONE
         _jobs[job_id].result = result
+    _jobs_counter.add(1, {"status": "done"})

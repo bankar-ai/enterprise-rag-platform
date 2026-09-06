@@ -3,13 +3,18 @@ import uuid
 import pytest
 
 from app.auth.service import (
+    AccountDisabledError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
+    UserNotFoundError,
+    list_all_users,
     login,
     logout,
     refresh_access_token,
     register_user,
+    revoke_user_sessions,
+    set_user_active_status,
 )
 
 # Mirrors the migration-seeded `system` user (alembic/versions/d456a2953c15_...): a fixed
@@ -90,6 +95,73 @@ def test_logout_revokes_token(auth_settings):
 
 def test_logout_of_unknown_token_is_a_no_op():
     logout("not-a-real-refresh-token")
+
+
+def test_list_all_users_includes_registered_user():
+    register_user("list-test@example.com", "a-long-enough-password")
+    emails = [user.email for user in list_all_users()]
+    assert "list-test@example.com" in emails
+
+
+def test_set_user_active_status_toggles_flag():
+    user = register_user("disable-test@example.com", "a-long-enough-password")
+    assert user.is_active is True
+
+    disabled = set_user_active_status(user.id, False)
+    assert disabled.is_active is False
+
+    enabled = set_user_active_status(user.id, True)
+    assert enabled.is_active is True
+
+
+def test_set_user_active_status_raises_for_unknown_user():
+    with pytest.raises(UserNotFoundError):
+        set_user_active_status(uuid.uuid4(), False)
+
+
+def test_disabled_user_cannot_login(auth_settings):
+    user = register_user("login-disabled@example.com", "a-long-enough-password")
+    set_user_active_status(user.id, False)
+
+    with pytest.raises(AccountDisabledError):
+        login("login-disabled@example.com", "a-long-enough-password", settings=auth_settings)
+
+
+def test_disabling_user_after_login_blocks_refresh_but_not_the_existing_access_token(
+    auth_settings,
+):
+    # Documents the accepted trade-off from the design: disabling a user blocks new logins and
+    # refreshes immediately, but an already-issued access token is stateless and keeps working
+    # until its own natural (short) expiry -- there is no per-request DB check.
+    user = register_user("disable-after-login@example.com", "a-long-enough-password")
+    tokens = login(
+        "disable-after-login@example.com", "a-long-enough-password", settings=auth_settings
+    )
+
+    set_user_active_status(user.id, False)
+
+    from app.auth.security import decode_access_token
+
+    current_user = decode_access_token(tokens.access_token, auth_settings)
+    assert current_user.id == user.id
+
+    with pytest.raises(AccountDisabledError):
+        refresh_access_token(tokens.refresh_token, settings=auth_settings)
+
+
+def test_revoke_user_sessions_invalidates_refresh_token(auth_settings):
+    user = register_user("revoke-sessions@example.com", "a-long-enough-password")
+    tokens = login("revoke-sessions@example.com", "a-long-enough-password", settings=auth_settings)
+
+    revoke_user_sessions(user.id)
+
+    with pytest.raises(InvalidRefreshTokenError):
+        refresh_access_token(tokens.refresh_token, settings=auth_settings)
+
+
+def test_revoke_user_sessions_raises_for_unknown_user():
+    with pytest.raises(UserNotFoundError):
+        revoke_user_sessions(uuid.uuid4())
 
 
 def test_login_against_seeded_system_user_raises_invalid_credentials(auth_settings):
