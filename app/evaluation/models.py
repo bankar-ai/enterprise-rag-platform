@@ -24,3 +24,18 @@ class EvaluationRunRecord(Base):
     mean_recall_at_k: Mapped[float]
     mrr: Mapped[float]
     details: Mapped[list[dict[str, object]]] = mapped_column(JSON)
+
+
+class GenerationEvaluationRunRecord(Base):
+    """One persisted generation-quality evaluation run's aggregate metrics and per-query breakdown."""
+
+    __tablename__ = "generation_evaluation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    judge: Mapped[str]
+    num_queries: Mapped[int]
+    mean_faithfulness: Mapped[float]
+    mean_answer_relevancy: Mapped[float]
+    mean_context_precision: Mapped[float]
+    details: Mapped[list[dict[str, object]]] = mapped_column(JSON)

@@ -2,9 +2,18 @@ import uuid
 
 from app.auth.repository import create_user
 from app.core.db import get_session_factory
-from app.evaluation.models import EvaluationRunRecord
-from app.evaluation.repository import cleanup_eval_data, save_evaluation_run
-from app.evaluation.schemas import EvaluationSummary, QueryResult
+from app.evaluation.models import EvaluationRunRecord, GenerationEvaluationRunRecord
+from app.evaluation.repository import (
+    cleanup_eval_data,
+    save_evaluation_run,
+    save_generation_evaluation_run,
+)
+from app.evaluation.schemas import (
+    EvaluationSummary,
+    GenerationEvaluationSummary,
+    GenerationQueryResult,
+    QueryResult,
+)
 from app.ingestion.repository import get_chunks_by_vector_ids, save_document_and_chunks
 from app.ingestion.schemas import Chunk
 
@@ -73,3 +82,42 @@ def test_cleanup_eval_data_removes_chunks_documents_and_user():
         session.commit()
 
         assert get_chunks_by_vector_ids(session, [vector_id], user.id) == {}
+
+
+def _generation_summary() -> GenerationEvaluationSummary:
+    return GenerationEvaluationSummary(
+        judge="ragas",
+        num_queries=1,
+        mean_faithfulness=0.9,
+        mean_answer_relevancy=0.8,
+        mean_context_precision=0.7,
+        per_query=[
+            GenerationQueryResult(
+                query="q",
+                answer="a",
+                faithfulness=0.9,
+                answer_relevancy=0.8,
+                context_precision=0.7,
+            )
+        ],
+    )
+
+
+def test_save_generation_evaluation_run_persists_summary_fields():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        record = save_generation_evaluation_run(session, _generation_summary())
+        session.commit()
+
+        assert record.judge == "ragas"
+        assert record.num_queries == 1
+        assert record.mean_faithfulness == 0.9
+        assert record.mean_answer_relevancy == 0.8
+        assert record.mean_context_precision == 0.7
+        assert record.details[0]["query"] == "q"
+
+        record_id = record.id
+        session.query(GenerationEvaluationRunRecord).filter(
+            GenerationEvaluationRunRecord.id == record_id
+        ).delete()
+        session.commit()
