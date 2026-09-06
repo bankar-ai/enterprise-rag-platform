@@ -44,8 +44,8 @@ Nothing outstanding from prior sessions remains open — see "Next Planned Work"
 
 ## Next Planned Work
 
-- Per-tenant/partitioned FAISS index — today's oversample-then-filter isolation (ERP-026) degrades recall under real multi-tenant scale; revisit once usage numbers justify a partitioned/per-tenant vector index. Also relevant to `docs/roadmap.md`'s still-open "Multi-document Retrieval" item.
-- External IdP / OAuth2 / OIDC integration — deferred; local email+password (ERP-026) is the v1 identity model.
+- Per-tenant/partitioned FAISS index — today's oversample-then-filter isolation (ERP-026) degrades recall under real multi-tenant scale; ticketed as ERP-031 (Backlog).
+- External IdP / OAuth2 / OIDC integration — deferred; local email+password (ERP-026) is the v1 identity model; ticketed as ERP-032 (Backlog).
 - Admin cross-user data visibility — the `admin` role is currently a distinction only (checked, but no elevated privilege); every ownership check is a bare `owner_id` equality with no admin bypass. Deferred rather than added untested at the tail of ERP-026 (surfaced by the final whole-branch review).
 - Self-service admin account creation — deliberately not exposed via `POST /auth/register`; the first `admin` user is created via a seed/manual DB step, deferred for future follow-up. ERP-027's admin endpoints still depend on this manual step to create the first admin.
 - No non-deferred work remains. Both halves of "Evaluation" are done (ERP-029 retrieval, ERP-030 generation); ERP-012's three deferred retrieval follow-ups, generation, conversation memory, streaming, and observability were all closed out in prior sessions. Everything left is one of the explicitly-deferred items above, or the future LLMOps & Evaluation Platform (a separate repo, not work here).
