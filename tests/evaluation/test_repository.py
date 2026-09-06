@@ -2,6 +2,7 @@ import uuid
 
 from app.auth.repository import create_user
 from app.core.db import get_session_factory
+from app.evaluation.models import EvaluationRunRecord
 from app.evaluation.repository import cleanup_eval_data, save_evaluation_run
 from app.evaluation.schemas import EvaluationSummary, QueryResult
 from app.ingestion.repository import get_chunks_by_vector_ids, save_document_and_chunks
@@ -40,6 +41,10 @@ def test_save_evaluation_run_persists_summary_fields():
         assert record.mean_recall_at_k == 1.0
         assert record.mrr == 1.0
         assert record.details[0]["query"] == "q"
+
+        record_id = record.id
+        session.query(EvaluationRunRecord).filter(EvaluationRunRecord.id == record_id).delete()
+        session.commit()
 
 
 def test_cleanup_eval_data_removes_chunks_documents_and_user():
