@@ -15,9 +15,8 @@ from app.core.db import get_session_factory
 from app.core.telemetry import get_tracer
 from app.embedding.client import EmbeddingClient, OllamaEmbeddingClient
 from app.embedding.config import EmbeddingSettings, get_embedding_settings
-from app.embedding.index import FaissIndex
+from app.embedding.index import OwnerFaissIndexStore
 from app.ingestion.repository import (
-    filter_vector_ids_by_owner,
     get_chunks_by_vector_ids,
     get_sibling_chunks,
     search_chunks_by_text,
@@ -120,7 +119,7 @@ def search(
     owner_id: uuid.UUID,
     settings: EmbeddingSettings | None = None,
     embedding_client: EmbeddingClient | None = None,
-    faiss_index: FaissIndex | None = None,
+    faiss_index_store: OwnerFaissIndexStore | None = None,
     rerank: bool = False,
     reranker: Reranker | None = None,
     expand_sections: bool = False,
@@ -128,7 +127,7 @@ def search(
 ) -> list[RetrievedChunk]:
     """Run hybrid (vector + BM25) search restricted to `owner_id`'s documents.
 
-    Returns up to `top_k` chunks, fused-score order. `embedding_client`/`faiss_index`/
+    Returns up to `top_k` chunks, fused-score order. `embedding_client`/`faiss_index_store`/
     `settings` are injectable for testing; default to Ollama/local-disk implementations
     built from `settings` (or the process-wide cached `EmbeddingSettings` if `settings` is
     not given).
@@ -147,12 +146,12 @@ def search(
     `owner_id`), is cache-aside -- a hit returns immediately without running any of the
     pipeline below.
 
-    Isolation is enforced via oversample-then-filter: FAISS and BM25 candidates are still
-    drawn from the full shared index/table (not per-user partitioned), then filtered to
-    `owner_id`'s documents during Postgres hydration. This is correct at today's scale but
-    can degrade recall once a single user's chunks are a small fraction of a large shared
-    index -- see the design spec's Future Follow-ups for the deferred partitioned-index
-    alternative.
+    Isolation is now structural (ERP-031): `faiss_index_store` is an `OwnerFaissIndexStore`,
+    which searches only `owner_id`'s own physically-separate index file -- there is no shared
+    index to filter after the fact, so another owner's vectors are never candidates in the
+    first place. BM25 is independently scoped by the same `owner_id` via a SQL join
+    (`search_chunks_by_text`). Oversampling candidates (`RRF_OVERSAMPLE_MULTIPLIER`) is kept
+    purely for RRF fusion quality now, not for isolation.
     """
     cache = cache or get_default_retrieval_cache()
     cache_key = _cache_key(query, top_k, rerank, expand_sections, owner_id)
@@ -162,25 +161,20 @@ def search(
 
     settings = settings or get_embedding_settings()
     embedding_client = embedding_client or OllamaEmbeddingClient(settings)
-    faiss_index = faiss_index or FaissIndex(settings.faiss_index_path, settings.dimension)
+    faiss_index_store = faiss_index_store or OwnerFaissIndexStore(
+        settings.faiss_index_dir, settings.dimension
+    )
 
     candidate_k = top_k * RRF_OVERSAMPLE_MULTIPLIER
 
     vectors = embedding_client.embed([query])
     if not vectors:
         raise ValueError("embedding client returned no vectors for the query")
-    vector_hits = faiss_index.search(vectors[0], candidate_k)
+    vector_hits = faiss_index_store.search(owner_id, vectors[0], candidate_k)
     vector_ranked_ids = [vector_id for vector_id, _ in vector_hits]
 
     session_factory = get_session_factory()
     with session_factory() as session:
-        # Restrict FAISS's (owner-blind) candidates to owner_id's own documents BEFORE
-        # fusion truncates to top_k -- otherwise another owner's higher-ranked vector hits
-        # can consume result slots that should have gone to the caller's own matches. Order
-        # is preserved (best-first) since RRF's rank contribution depends on list position.
-        owned_vector_ids = set(filter_vector_ids_by_owner(session, vector_ranked_ids, owner_id))
-        vector_ranked_ids = [vid for vid in vector_ranked_ids if vid in owned_vector_ids]
-
         bm25_hits = search_chunks_by_text(session, query, candidate_k, owner_id)
         bm25_ranked_ids = [vector_id for vector_id, _ in bm25_hits]
 

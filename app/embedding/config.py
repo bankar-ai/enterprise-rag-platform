@@ -16,7 +16,7 @@ class EmbeddingSettings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     model: str = "nomic-embed-text"
     dimension: int = 768
-    faiss_index_path: str = "data/faiss_index.bin"
+    faiss_index_dir: str = "data/faiss_index"
     redis_url: str = "redis://localhost:6379/0"
     cache_ttl_seconds: int = 86400
     redis_socket_timeout_seconds: float = 2.0

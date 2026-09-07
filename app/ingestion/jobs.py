@@ -6,7 +6,7 @@ import uuid
 
 from app.core.telemetry import get_meter
 from app.embedding.client import EmbeddingClient
-from app.embedding.index import FaissIndex
+from app.embedding.index import OwnerFaissIndexStore
 from app.embedding.service import embed_and_persist
 from app.ingestion.config import IngestionSettings
 from app.ingestion.schemas import IngestResponse, JobStatus
@@ -54,7 +54,7 @@ def run_ingestion_job(
     settings: IngestionSettings,
     owner_id: uuid.UUID,
     embedding_client: EmbeddingClient | None = None,
-    faiss_index: FaissIndex | None = None,
+    faiss_index_store: OwnerFaissIndexStore | None = None,
 ) -> None:
     """Run ingestion for `job_id`, recording DONE + result or FAILED + error on the job record.
 
@@ -73,7 +73,7 @@ def run_ingestion_job(
             chunks=result.chunks,
             owner_id=owner_id,
             embedding_client=embedding_client,
-            faiss_index=faiss_index,
+            faiss_index_store=faiss_index_store,
         )
     except Exception as exc:  # noqa: BLE001 - job failure is reported via status, not raised
         logger.exception("Ingestion job %s failed for file %r", job_id, filename)
