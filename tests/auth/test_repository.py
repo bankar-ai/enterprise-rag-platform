@@ -2,8 +2,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.auth.repository import (
+    create_oidc_identity,
+    create_oidc_user,
     create_refresh_token,
     create_user,
+    get_oidc_identity,
     get_refresh_token_by_hash,
     get_user_by_email,
     get_user_by_id,
@@ -113,3 +116,32 @@ def test_revoke_all_refresh_tokens_for_user_revokes_only_that_users_tokens():
 
         assert get_refresh_token_by_hash(session, "revoke-a-hash").revoked_at is not None
         assert get_refresh_token_by_hash(session, "revoke-b-hash").revoked_at is None
+
+
+def test_create_oidc_user_has_no_password():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        user = create_oidc_user(session, "oidc-repo-test@example.com")
+        session.commit()
+        assert user.hashed_password is None
+        assert user.role == "user"
+
+
+def test_create_and_get_oidc_identity_round_trip():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        user = create_oidc_user(session, "oidc-identity-repo-test@example.com")
+        session.flush()
+        identity = create_oidc_identity(session, user.id, "google", "external-123", user.email)
+        session.commit()
+
+        found = get_oidc_identity(session, "google", "external-123")
+        assert found is not None
+        assert found.id == identity.id
+        assert found.user_id == user.id
+
+
+def test_get_oidc_identity_returns_none_for_unknown_pair():
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        assert get_oidc_identity(session, "google", "no-such-external-id") is None

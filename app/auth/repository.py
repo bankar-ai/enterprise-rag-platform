@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.auth.models import RefreshTokenRecord, UserRecord
+from app.auth.models import OidcIdentityRecord, RefreshTokenRecord, UserRecord
 
 
 def get_user_by_email(session: Session, email: str) -> UserRecord | None:
@@ -41,13 +41,37 @@ def revoke_all_refresh_tokens_for_user(session: Session, user_id: uuid.UUID) -> 
 
 
 def create_user(
-    session: Session, email: str, hashed_password: str, role: str = "user"
+    session: Session, email: str, hashed_password: str | None, role: str = "user"
 ) -> UserRecord:
     """Create and flush a new user row. Does not commit — the caller controls the transaction."""
     user = UserRecord(email=email, hashed_password=hashed_password, role=role)
     session.add(user)
     session.flush()
     return user
+
+
+def create_oidc_user(session: Session, email: str, role: str = "user") -> UserRecord:
+    """Create and flush a new OIDC-only user row (no local password). Does not commit."""
+    return create_user(session, email, hashed_password=None, role=role)
+
+
+def get_oidc_identity(session: Session, provider: str, external_id: str) -> OidcIdentityRecord | None:
+    """Return the linked identity for `(provider, external_id)`, or `None` if none exists."""
+    return session.scalars(
+        select(OidcIdentityRecord).where(
+            OidcIdentityRecord.provider == provider, OidcIdentityRecord.external_id == external_id
+        )
+    ).first()
+
+
+def create_oidc_identity(
+    session: Session, user_id: uuid.UUID, provider: str, external_id: str, email: str
+) -> OidcIdentityRecord:
+    """Create and flush a new OIDC identity link. Does not commit."""
+    identity = OidcIdentityRecord(user_id=user_id, provider=provider, external_id=external_id, email=email)
+    session.add(identity)
+    session.flush()
+    return identity
 
 
 def create_refresh_token(
