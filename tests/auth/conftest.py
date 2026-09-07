@@ -19,6 +19,20 @@ def auth_settings() -> AuthSettings:
     )
 
 
+@pytest.fixture
+def oidc_settings(auth_settings: AuthSettings) -> AuthSettings:
+    """`auth_settings` with OIDC configured against a fake issuer, for OIDC-flow tests."""
+    return auth_settings.model_copy(
+        update={
+            "oidc_provider_name": "google",
+            "oidc_issuer": "https://idp.example.com",
+            "oidc_client_id": "test-client-id",
+            "oidc_client_secret": "test-client-secret",
+            "oidc_redirect_uri": "https://app.example.com/auth/oidc/google/callback",
+        }
+    )
+
+
 @pytest.fixture(autouse=True)
 def _flush_test_redis_db(auth_settings: AuthSettings):
     """Flush the test-only Redis logical DB before and after every auth test."""

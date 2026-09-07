@@ -16,5 +16,13 @@ def test_settings_have_expected_defaults(auth_settings):
     assert auth_settings.refresh_token_expire_days == 30
 
 
+def test_oidc_settings_default_unconfigured(auth_settings):
+    assert auth_settings.oidc_provider_name == "google"
+    assert auth_settings.oidc_issuer is None
+    assert auth_settings.oidc_client_id is None
+    assert auth_settings.oidc_client_secret is None
+    assert auth_settings.oidc_redirect_uri is None
+
+
 def test_get_auth_settings_is_cached():
     assert get_auth_settings() is get_auth_settings()

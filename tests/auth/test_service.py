@@ -2,12 +2,16 @@ import uuid
 
 import pytest
 
+from app.auth import oidc
 from app.auth.service import (
     AccountDisabledError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
+    OidcAccountConflictError,
+    OidcNotConfiguredError,
     UserNotFoundError,
+    complete_oidc_login,
     list_all_users,
     login,
     logout,
@@ -15,6 +19,7 @@ from app.auth.service import (
     register_user,
     revoke_user_sessions,
     set_user_active_status,
+    start_oidc_login,
 )
 
 # Mirrors the migration-seeded `system` user (alembic/versions/d456a2953c15_...): a fixed
@@ -162,6 +167,185 @@ def test_revoke_user_sessions_invalidates_refresh_token(auth_settings):
 def test_revoke_user_sessions_raises_for_unknown_user():
     with pytest.raises(UserNotFoundError):
         revoke_user_sessions(uuid.uuid4())
+
+
+def _canned_claims(**overrides) -> dict:
+    claims = {
+        "sub": "external-id-1",
+        "email": "oidc-service-test@example.com",
+        "email_verified": True,
+    }
+    claims.update(overrides)
+    return claims
+
+
+def _patch_oidc_flow(monkeypatch, claims: dict) -> None:
+    """Stub out every network/crypto call `complete_oidc_login` makes, returning `claims`."""
+    monkeypatch.setattr(
+        oidc, "decode_oidc_cookie", lambda cookie_value, state, settings: ("verifier", "nonce")
+    )
+    monkeypatch.setattr(oidc, "discover_metadata", lambda issuer, settings: {"token_endpoint": "x"})
+    monkeypatch.setattr(
+        oidc, "exchange_code_for_tokens", lambda metadata, settings, code, verifier: {"id_token": "fake"}
+    )
+    monkeypatch.setattr(oidc, "verify_id_token", lambda id_token, metadata, settings, nonce: claims)
+
+
+def test_start_oidc_login_raises_when_not_configured(auth_settings):
+    with pytest.raises(OidcNotConfiguredError):
+        start_oidc_login("google", settings=auth_settings)
+
+
+def test_start_oidc_login_raises_for_wrong_provider_name(oidc_settings):
+    with pytest.raises(OidcNotConfiguredError):
+        start_oidc_login("okta", settings=oidc_settings)
+
+
+def test_start_oidc_login_returns_authorization_url(oidc_settings, monkeypatch):
+    monkeypatch.setattr(
+        oidc,
+        "discover_metadata",
+        lambda issuer, settings: {"authorization_endpoint": "https://idp.example.com/authorize"},
+    )
+    login_start = start_oidc_login("google", settings=oidc_settings)
+    assert login_start.authorization_url.startswith("https://idp.example.com/authorize?")
+    assert "code_challenge=" in login_start.authorization_url
+    assert "state=" in login_start.authorization_url
+    assert login_start.state_cookie_value
+    assert login_start.state_cookie_max_age_seconds == oidc_settings.oidc_state_expire_seconds
+
+
+def test_complete_oidc_login_creates_new_user_and_issues_tokens(oidc_settings, monkeypatch):
+    claims = _canned_claims(email="new-oidc-user@example.com")
+    _patch_oidc_flow(monkeypatch, claims)
+
+    tokens = complete_oidc_login("google", "auth-code", "state", "cookie-value", settings=oidc_settings)
+
+    assert tokens.access_token
+    assert tokens.refresh_token
+
+    from app.auth.repository import get_user_by_email
+    from app.core.db import get_session_factory
+
+    with get_session_factory()() as session:
+        user = get_user_by_email(session, "new-oidc-user@example.com")
+        assert user is not None
+        assert user.hashed_password is None
+
+
+def test_complete_oidc_login_reuses_existing_linked_identity(oidc_settings, monkeypatch):
+    claims = _canned_claims(sub="repeat-external-id", email="repeat-oidc-user@example.com")
+    _patch_oidc_flow(monkeypatch, claims)
+
+    first_tokens = complete_oidc_login("google", "code-1", "state-1", "cookie-value", settings=oidc_settings)
+    second_tokens = complete_oidc_login("google", "code-2", "state-2", "cookie-value", settings=oidc_settings)
+
+    from app.auth.security import decode_access_token
+
+    first_user = decode_access_token(first_tokens.access_token, oidc_settings)
+    second_user = decode_access_token(second_tokens.access_token, oidc_settings)
+    assert first_user.id == second_user.id
+
+
+def test_complete_oidc_login_auto_links_verified_email_to_existing_local_user(oidc_settings, monkeypatch):
+    local_user = register_user("linkable-oidc-user@example.com", "a-long-enough-password")
+    claims = _canned_claims(sub="linkable-external-id", email="linkable-oidc-user@example.com")
+    _patch_oidc_flow(monkeypatch, claims)
+
+    tokens = complete_oidc_login("google", "auth-code", "state", "cookie-value", settings=oidc_settings)
+
+    from app.auth.security import decode_access_token
+
+    linked_user = decode_access_token(tokens.access_token, oidc_settings)
+    assert linked_user.id == local_user.id
+
+    # Local login still works unchanged after linking.
+    local_login_tokens = login(
+        "linkable-oidc-user@example.com", "a-long-enough-password", settings=oidc_settings
+    )
+    assert local_login_tokens.access_token
+
+
+def test_complete_oidc_login_rejects_conflict_when_email_not_verified(oidc_settings, monkeypatch):
+    register_user("unverified-conflict-user@example.com", "a-long-enough-password")
+    claims = _canned_claims(
+        sub="conflict-external-id", email="unverified-conflict-user@example.com", email_verified=False
+    )
+    _patch_oidc_flow(monkeypatch, claims)
+
+    with pytest.raises(OidcAccountConflictError):
+        complete_oidc_login("google", "auth-code", "state", "cookie-value", settings=oidc_settings)
+
+    from app.auth.repository import get_oidc_identity
+    from app.core.db import get_session_factory
+
+    with get_session_factory()() as session:
+        assert get_oidc_identity(session, "google", "conflict-external-id") is None
+
+
+def test_complete_oidc_login_rejects_conflict_when_email_verified_claim_missing(oidc_settings, monkeypatch):
+    register_user("missing-verified-claim-user@example.com", "a-long-enough-password")
+    claims = {"sub": "missing-claim-external-id", "email": "missing-verified-claim-user@example.com"}
+    _patch_oidc_flow(monkeypatch, claims)
+
+    with pytest.raises(OidcAccountConflictError):
+        complete_oidc_login("google", "auth-code", "state", "cookie-value", settings=oidc_settings)
+
+
+def test_complete_oidc_login_raises_for_disabled_linked_account(oidc_settings, monkeypatch):
+    claims = _canned_claims(sub="disabled-external-id", email="disabled-oidc-user@example.com")
+    _patch_oidc_flow(monkeypatch, claims)
+    complete_oidc_login("google", "code-1", "state-1", "cookie-value", settings=oidc_settings)
+
+    from app.auth.repository import get_user_by_email
+    from app.core.db import get_session_factory
+
+    with get_session_factory()() as session:
+        user = get_user_by_email(session, "disabled-oidc-user@example.com")
+    set_user_active_status(user.id, False)
+
+    with pytest.raises(AccountDisabledError):
+        complete_oidc_login("google", "code-2", "state-2", "cookie-value", settings=oidc_settings)
+
+
+def test_complete_oidc_login_raises_when_not_configured(auth_settings):
+    with pytest.raises(OidcNotConfiguredError):
+        complete_oidc_login("google", "code", "state", "cookie-value", settings=auth_settings)
+
+
+def test_complete_oidc_login_raises_when_state_cookie_missing(oidc_settings):
+    with pytest.raises(oidc.InvalidOidcStateError):
+        complete_oidc_login("google", "code", "state", None, settings=oidc_settings)
+
+
+def test_complete_oidc_login_propagates_invalid_state(oidc_settings, monkeypatch):
+    def _raise_invalid_state(cookie_value, state, settings):
+        raise oidc.InvalidOidcStateError
+
+    monkeypatch.setattr(oidc, "decode_oidc_cookie", _raise_invalid_state)
+
+    with pytest.raises(oidc.InvalidOidcStateError):
+        complete_oidc_login("google", "code", "bad-state", "cookie-value", settings=oidc_settings)
+
+
+def test_complete_oidc_login_raises_when_id_token_missing_from_response(oidc_settings, monkeypatch):
+    monkeypatch.setattr(
+        oidc, "decode_oidc_cookie", lambda cookie_value, state, settings: ("verifier", "nonce")
+    )
+    monkeypatch.setattr(oidc, "discover_metadata", lambda issuer, settings: {})
+    monkeypatch.setattr(
+        oidc, "exchange_code_for_tokens", lambda metadata, settings, code, verifier: {"access_token": "x"}
+    )
+
+    with pytest.raises(oidc.OidcTokenExchangeError):
+        complete_oidc_login("google", "code", "state", "cookie-value", settings=oidc_settings)
+
+
+def test_complete_oidc_login_raises_when_claims_missing_sub_or_email(oidc_settings, monkeypatch):
+    _patch_oidc_flow(monkeypatch, {"email_verified": True})
+
+    with pytest.raises(oidc.OidcTokenValidationError):
+        complete_oidc_login("google", "code", "state", "cookie-value", settings=oidc_settings)
 
 
 def test_login_against_seeded_system_user_raises_invalid_credentials(auth_settings):

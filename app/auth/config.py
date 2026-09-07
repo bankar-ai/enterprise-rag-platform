@@ -25,6 +25,20 @@ class AuthSettings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     redis_socket_timeout_seconds: float = 2.0
 
+    # OIDC (ERP-032). All four of issuer/client_id/client_secret/redirect_uri must be set for
+    # OIDC login to be considered "configured" -- see app/auth/service.py's `_is_oidc_configured`.
+    # Left unset by default so a deployment that never configures OIDC sees no behavior change
+    # (both /auth/oidc/* endpoints 404). Provider-agnostic: only `oidc_provider_name` (the route
+    # segment) is provider-specific; everything else (endpoints, signing keys) comes from the
+    # issuer's discovery document at request time, never hardcoded for a specific IdP.
+    oidc_provider_name: str = "google"
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_redirect_uri: str | None = None
+    oidc_state_expire_seconds: int = 300
+    oidc_http_timeout_seconds: float = 5.0
+
 
 @lru_cache
 def get_auth_settings() -> AuthSettings:
