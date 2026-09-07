@@ -1,14 +1,20 @@
-"""Business logic for registration, login, refresh-token rotation, and logout."""
+"""Business logic for registration, login, refresh-token rotation, logout, and OIDC login."""
 
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple, cast
 
+from app.auth import oidc
 from app.auth.cache import RevocationCache, get_default_revocation_cache
 from app.auth.config import AuthSettings, get_auth_settings
 from app.auth.models import UserRecord
 from app.auth.repository import (
+    create_oidc_identity,
+    create_oidc_user,
     create_refresh_token,
     create_user,
+    get_oidc_identity,
     get_refresh_token_by_hash,
     get_user_by_email,
     get_user_by_id,
@@ -48,6 +54,26 @@ class UserNotFoundError(Exception):
     """Raised when an admin operation targets an unknown user id."""
 
 
+class OidcNotConfiguredError(Exception):
+    """Raised when OIDC login is requested for an unconfigured or unknown provider.
+
+    Deliberately raised identically for "OIDC isn't configured at all" and "this provider name
+    doesn't match the configured one" -- both become the same generic 404, so an unauthenticated
+    caller can't use the response to probe which providers (if any) are configured.
+    """
+
+
+class OidcAccountConflictError(Exception):
+    """Raised when an OIDC login's email matches an existing account that can't be auto-linked.
+
+    See the design spec's Account Linking Decision: auto-linking only happens when the IdP's ID
+    token asserts `email_verified: true` for the claimed email. Otherwise, silently linking (or
+    creating a second account for) that email would let anyone who controls an OIDC identity with
+    an unverified claim to someone else's address take over the existing account for that
+    address -- exactly the account-takeover risk this decision exists to close off.
+    """
+
+
 def _as_aware_utc(value: datetime) -> datetime:
     """Attach UTC tzinfo to a naive `datetime` (the `expires_at` column is stored without one)."""
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
@@ -81,17 +107,20 @@ def login(
 ) -> TokenResponse:
     """Exchange email + password for an access + refresh token pair.
 
-    Raises `InvalidCredentialsError` for either an unknown email or a wrong password —
-    deliberately the same error for both, to avoid confirming which emails are registered.
-    Raises `AccountDisabledError` if the password matched but the account is disabled — safe
-    to distinguish here since the password was already verified, so it reveals nothing new
-    about which emails are registered.
+    Raises `InvalidCredentialsError` for an unknown email, a wrong password, or an OIDC-only
+    account with no local password set (`hashed_password is None`) — all three deliberately the
+    same error, to avoid confirming which emails are registered or how a given account
+    authenticates. Raises `AccountDisabledError` if the password matched but the account is
+    disabled — safe to distinguish here since the password was already verified, so it reveals
+    nothing new about which emails are registered.
     """
     settings = settings or get_auth_settings()
     session_factory = get_session_factory()
     with session_factory() as session:
         user = get_user_by_email(session, email)
-        if user is None or not verify_password(password, user.hashed_password):
+        if user is None or user.hashed_password is None or not verify_password(
+            password, user.hashed_password
+        ):
             raise InvalidCredentialsError
         if not user.is_active:
             raise AccountDisabledError
@@ -193,3 +222,123 @@ def revoke_user_sessions(user_id: uuid.UUID) -> None:
             raise UserNotFoundError(user_id)
         revoke_all_refresh_tokens_for_user(session, user_id)
         session.commit()
+
+
+def _is_oidc_configured(settings: AuthSettings) -> bool:
+    return bool(
+        settings.oidc_issuer
+        and settings.oidc_client_id
+        and settings.oidc_client_secret
+        and settings.oidc_redirect_uri
+    )
+
+
+def _check_oidc_provider(provider: str, settings: AuthSettings) -> None:
+    if not _is_oidc_configured(settings) or provider != settings.oidc_provider_name:
+        raise OidcNotConfiguredError(provider)
+
+
+class OidcLoginStart(NamedTuple):
+    """The result of starting an OIDC login: where to redirect, and the cookie to set alongside it."""
+
+    authorization_url: str
+    state_cookie_value: str
+    state_cookie_max_age_seconds: int
+
+
+def start_oidc_login(provider: str, settings: AuthSettings | None = None) -> OidcLoginStart:
+    """Build the authorization URL to redirect the caller's browser to, starting an OIDC login.
+
+    The returned `state_cookie_value` must be set by the router as an `HttpOnly`/`Secure`/
+    `SameSite=Lax` cookie alongside the redirect -- it carries the PKCE verifier and nonce out of
+    any URL entirely, and is what `complete_oidc_login` uses to both recover them and defend
+    against login CSRF (see `app/auth/oidc.py`'s `create_oidc_cookie`/`decode_oidc_cookie`).
+
+    Raises `OidcNotConfiguredError` if `provider` doesn't match the configured provider name, or
+    OIDC isn't configured at all.
+    """
+    settings = settings or get_auth_settings()
+    _check_oidc_provider(provider, settings)
+
+    metadata = oidc.discover_metadata(cast(str, settings.oidc_issuer), settings)
+    code_verifier, code_challenge = oidc.generate_pkce_pair()
+    nonce = secrets.token_urlsafe(16)
+    state = oidc.generate_state_value()
+    cookie_value = oidc.create_oidc_cookie(state, code_verifier, nonce, settings)
+    authorization_url = oidc.build_authorization_url(metadata, settings, state, nonce, code_challenge)
+    return OidcLoginStart(authorization_url, cookie_value, settings.oidc_state_expire_seconds)
+
+
+def _resolve_oidc_user(provider: str, external_id: str, email: str, email_verified: bool) -> UserRecord:
+    """Look up, link, or create the local user for an OIDC identity. Commits its own transaction.
+
+    See the design spec's Account Linking Decision: an existing account with a matching email is
+    only auto-linked when `email_verified` is `True`; otherwise raises `OidcAccountConflictError`
+    without creating anything.
+    """
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        identity = get_oidc_identity(session, provider, external_id)
+        if identity is not None:
+            user = session.get(UserRecord, identity.user_id)
+            if user is None:  # pragma: no cover - unreachable: FK guarantees the user still exists
+                raise InvalidCredentialsError
+        else:
+            existing = get_user_by_email(session, email)
+            if existing is not None:
+                if not email_verified:
+                    raise OidcAccountConflictError(email)
+                user = existing
+            else:
+                user = create_oidc_user(session, email)
+            create_oidc_identity(session, user.id, provider, external_id, email)
+
+        if not user.is_active:
+            raise AccountDisabledError
+
+        session.commit()
+        return user
+
+
+def complete_oidc_login(
+    provider: str,
+    code: str,
+    state: str,
+    state_cookie_value: str | None,
+    settings: AuthSettings | None = None,
+) -> TokenResponse:
+    """Exchange an authorization code for tokens, resolve/link the user, and issue our own tokens.
+
+    `state_cookie_value` is the `oidc_state` cookie the router read from the incoming request --
+    required (not optional in practice) to recover the PKCE verifier/nonce and to bind this
+    callback to the browser that started the flow (login-CSRF defense); a missing cookie raises
+    `oidc.InvalidOidcStateError` exactly like a bad one, so a forged callback link with no cookie
+    at all fails the same way as one with a mismatched cookie.
+
+    Raises `OidcNotConfiguredError`, `oidc.InvalidOidcStateError`, `oidc.OidcTokenExchangeError`,
+    `oidc.OidcTokenValidationError`, `OidcAccountConflictError`, or `AccountDisabledError` — see
+    `app/auth/router.py` for the HTTP status each maps to.
+    """
+    settings = settings or get_auth_settings()
+    _check_oidc_provider(provider, settings)
+
+    if state_cookie_value is None:
+        raise oidc.InvalidOidcStateError("missing OIDC state cookie")
+    code_verifier, nonce = oidc.decode_oidc_cookie(state_cookie_value, state, settings)
+    metadata = oidc.discover_metadata(cast(str, settings.oidc_issuer), settings)
+    token_response = oidc.exchange_code_for_tokens(metadata, settings, code, code_verifier)
+    try:
+        id_token = token_response["id_token"]
+    except KeyError as exc:
+        raise oidc.OidcTokenExchangeError("IdP response did not include an id_token") from exc
+
+    claims = oidc.verify_id_token(id_token, metadata, settings, nonce)
+    try:
+        external_id = cast(str, claims["sub"])
+        email = cast(str, claims["email"])
+    except KeyError as exc:
+        raise oidc.OidcTokenValidationError("ID token missing required sub/email claim") from exc
+    email_verified = bool(claims.get("email_verified", False))
+
+    user = _resolve_oidc_user(provider, external_id, email, email_verified)
+    return _issue_tokens(user, settings)

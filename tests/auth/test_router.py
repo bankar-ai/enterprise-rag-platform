@@ -1,8 +1,73 @@
+from urllib.parse import parse_qs, urlparse
+
+import pytest
 from fastapi.testclient import TestClient
 
+from app.auth import oidc
+from app.auth.config import get_auth_settings
 from app.main import app
 
-client = TestClient(app)
+# base_url="https://..." (not the default http://testserver) so the OIDC flow's `Secure` cookie
+# (app/auth/router.py's oidc_state cookie) actually round-trips through this client -- httpx's
+# cookie jar won't send a Secure-flagged cookie back over a plain http:// request.
+client = TestClient(app, base_url="https://testserver")
+
+_OIDC_ENV = {
+    "AUTH_OIDC_PROVIDER_NAME": "google",
+    "AUTH_OIDC_ISSUER": "https://idp.example.com",
+    "AUTH_OIDC_CLIENT_ID": "test-client-id",
+    "AUTH_OIDC_CLIENT_SECRET": "test-client-secret",
+    "AUTH_OIDC_REDIRECT_URI": "https://app.example.com/auth/oidc/google/callback",
+}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_oidc_cookie_jar():
+    """Clear the shared `client`'s cookie jar before/after each test.
+
+    `client` is module-level (shared across every test in this file, matching the rest of the
+    suite's convention), so without this, an `oidc_state` cookie set by one test's `/login` call
+    could leak into a later test that never called `/login` itself, making cookie-dependent
+    assertions order-dependent.
+    """
+    client.cookies.clear()
+    yield
+    client.cookies.clear()
+
+
+@pytest.fixture
+def configured_oidc(monkeypatch):
+    """Configure OIDC via env vars for the duration of one test, then restore."""
+    for key, value in _OIDC_ENV.items():
+        monkeypatch.setenv(key, value)
+    get_auth_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_auth_settings.cache_clear()
+
+
+def _canned_claims(**overrides) -> dict:
+    claims = {"sub": "router-external-id", "email": "router-oidc@example.com", "email_verified": True}
+    claims.update(overrides)
+    return claims
+
+
+def _stub_oidc_network(monkeypatch, claims: dict) -> None:
+    monkeypatch.setattr(
+        oidc,
+        "discover_metadata",
+        lambda issuer, settings: {
+            "issuer": issuer,
+            "authorization_endpoint": "https://idp.example.com/authorize",
+            "token_endpoint": "https://idp.example.com/token",
+            "jwks_uri": "https://idp.example.com/jwks",
+        },
+    )
+    monkeypatch.setattr(
+        oidc, "exchange_code_for_tokens", lambda metadata, settings, code, verifier: {"id_token": "fake"}
+    )
+    monkeypatch.setattr(oidc, "verify_id_token", lambda id_token, metadata, settings, nonce: claims)
 
 
 def test_register_then_login_then_refresh_then_logout():
@@ -63,6 +128,122 @@ def test_login_rejects_wrong_password():
 def test_refresh_rejects_unknown_token():
     response = client.post("/auth/refresh", json={"refresh_token": "not-a-real-token"})
     assert response.status_code == 401
+
+
+def test_oidc_login_redirects_to_authorization_endpoint(configured_oidc, monkeypatch):
+    _stub_oidc_network(monkeypatch, _canned_claims())
+
+    response = client.get("/auth/oidc/google/login", follow_redirects=False)
+
+    assert response.status_code == 307
+    location = response.headers["location"]
+    assert location.startswith("https://idp.example.com/authorize?")
+    params = parse_qs(urlparse(location).query)
+    assert params["client_id"] == ["test-client-id"]
+    assert params["redirect_uri"] == ["https://app.example.com/auth/oidc/google/callback"]
+    assert params["code_challenge_method"] == ["S256"]
+    assert "state" in params
+    assert "nonce" in params
+
+
+def test_oidc_login_404_for_unknown_provider(configured_oidc, monkeypatch):
+    _stub_oidc_network(monkeypatch, _canned_claims())
+    response = client.get("/auth/oidc/okta/login", follow_redirects=False)
+    assert response.status_code == 404
+
+
+def test_oidc_login_404_when_not_configured():
+    response = client.get("/auth/oidc/google/login", follow_redirects=False)
+    assert response.status_code == 404
+
+
+def test_oidc_callback_full_round_trip_creates_user_and_issues_tokens(configured_oidc, monkeypatch):
+    claims = _canned_claims(sub="full-roundtrip-external-id", email="full-roundtrip@example.com")
+    _stub_oidc_network(monkeypatch, claims)
+
+    login_response = client.get("/auth/oidc/google/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+
+    callback_response = client.get(
+        "/auth/oidc/google/callback", params={"code": "auth-code", "state": state}
+    )
+
+    assert callback_response.status_code == 200
+    tokens = callback_response.json()
+    assert tokens["access_token"]
+    assert tokens["refresh_token"]
+
+    # The issued access token works against a real protected endpoint, exactly like local login.
+    me_response = client.get(
+        "/admin/users", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+    )
+    assert me_response.status_code == 403  # not an admin -- but 403, not 401, proves the token is valid
+
+
+def test_oidc_callback_rejects_missing_state_cookie(configured_oidc, monkeypatch):
+    # No prior /login call in this test, so no oidc_state cookie was ever set.
+    _stub_oidc_network(monkeypatch, _canned_claims())
+    response = client.get(
+        "/auth/oidc/google/callback", params={"code": "auth-code", "state": "not-a-real-state"}
+    )
+    assert response.status_code == 400
+
+
+def test_oidc_callback_rejects_state_not_matching_cookie(configured_oidc, monkeypatch):
+    # Simulates an attacker tampering with the `state` query parameter -- the cookie set by our
+    # own /login call is present and valid, but doesn't match the (attacker-supplied) state.
+    _stub_oidc_network(monkeypatch, _canned_claims())
+    client.get("/auth/oidc/google/login", follow_redirects=False)
+
+    response = client.get(
+        "/auth/oidc/google/callback", params={"code": "auth-code", "state": "attacker-supplied-state"}
+    )
+    assert response.status_code == 400
+
+
+def test_oidc_callback_404_for_unknown_provider(configured_oidc, monkeypatch):
+    _stub_oidc_network(monkeypatch, _canned_claims())
+    response = client.get(
+        "/auth/oidc/okta/callback", params={"code": "auth-code", "state": "irrelevant"}
+    )
+    assert response.status_code == 404
+
+
+def test_oidc_callback_conflict_when_email_exists_unverified(configured_oidc, monkeypatch):
+    email = "router-conflict@example.com"
+    client.post("/auth/register", json={"email": email, "password": "a-long-enough-password"})
+    claims = _canned_claims(sub="router-conflict-external-id", email=email, email_verified=False)
+    _stub_oidc_network(monkeypatch, claims)
+
+    login_response = client.get("/auth/oidc/google/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+
+    response = client.get("/auth/oidc/google/callback", params={"code": "auth-code", "state": state})
+    assert response.status_code == 409
+
+
+def test_oidc_callback_502_when_token_exchange_fails(configured_oidc, monkeypatch):
+    monkeypatch.setattr(
+        oidc,
+        "discover_metadata",
+        lambda issuer, settings: {
+            "issuer": issuer,
+            "authorization_endpoint": "https://idp.example.com/authorize",
+            "token_endpoint": "https://idp.example.com/token",
+            "jwks_uri": "https://idp.example.com/jwks",
+        },
+    )
+
+    def _raise_exchange_error(metadata, settings, code, verifier):
+        raise oidc.OidcTokenExchangeError
+
+    monkeypatch.setattr(oidc, "exchange_code_for_tokens", _raise_exchange_error)
+
+    login_response = client.get("/auth/oidc/google/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+
+    response = client.get("/auth/oidc/google/callback", params={"code": "auth-code", "state": state})
+    assert response.status_code == 502
 
 
 # Note on Finding 2 (final whole-branch review, uncaught InvalidHashError against the seeded
