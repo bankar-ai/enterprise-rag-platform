@@ -6,6 +6,7 @@ each with the selected judge, persists a summary, and cleans up.
 """
 
 import os
+import shutil
 import tempfile
 import uuid
 
@@ -13,7 +14,7 @@ from app.auth.repository import create_user
 from app.core.db import get_session_factory
 from app.embedding.client import EmbeddingClient
 from app.embedding.config import get_embedding_settings
-from app.embedding.index import FaissIndex
+from app.embedding.index import OwnerFaissIndexStore
 from app.embedding.service import embed_and_persist
 from app.evaluation.dataset import GOLDEN_DOCUMENTS, GOLDEN_QUERIES
 from app.evaluation.judges import GenerationJudge, RagasJudge
@@ -30,25 +31,25 @@ def run_generation_evaluation(
     judge: GenerationJudge | None = None,
     llm_client: LLMClient | None = None,
     embedding_client: EmbeddingClient | None = None,
-    faiss_index: FaissIndex | None = None,
+    faiss_index_store: OwnerFaissIndexStore | None = None,
     top_k: int = 3,
 ) -> GenerationEvaluationSummary:
     """Run the golden dataset through the real generation pipeline and return a scored summary.
 
     `judge` defaults to `RagasJudge()`; pass `OllamaLLMClientJudge(...)` to use the fallback.
     Same isolation/cleanup lifecycle as `app.evaluation.runner.run_evaluation`: a dedicated
-    temp FAISS index (never the real app's persisted one), and every transient row this run
-    creates (eval user, documents, chunks) is deleted before returning -- only the summary
-    row persists.
+    temp-dir-backed `OwnerFaissIndexStore` (never the real app's persisted index), and every
+    transient row this run creates (eval user, documents, chunks) is deleted before
+    returning -- only the summary row persists.
     """
     judge = judge or RagasJudge()
     generation_settings = get_generation_settings()
     llm_client = llm_client or OllamaLLMClient(generation_settings)
 
-    owned_temp_index_path: str | None = None
-    if faiss_index is None:
-        owned_temp_index_path = f"{tempfile.gettempdir()}/gen-eval-{uuid.uuid4().hex}.index"
-        faiss_index = FaissIndex(owned_temp_index_path, get_embedding_settings().dimension)
+    owned_temp_index_dir: str | None = None
+    if faiss_index_store is None:
+        owned_temp_index_dir = f"{tempfile.gettempdir()}/gen-eval-{uuid.uuid4().hex}"
+        faiss_index_store = OwnerFaissIndexStore(owned_temp_index_dir, get_embedding_settings().dimension)
 
     session_factory = get_session_factory()
     with session_factory() as session:
@@ -81,7 +82,7 @@ def run_generation_evaluation(
             chunks=chunks,
             owner_id=owner_id,
             embedding_client=embedding_client,
-            faiss_index=faiss_index,
+            faiss_index_store=faiss_index_store,
         )
 
     per_query: list[GenerationQueryResult] = []
@@ -91,7 +92,7 @@ def run_generation_evaluation(
             top_k=top_k,
             owner_id=owner_id,
             embedding_client=embedding_client,
-            faiss_index=faiss_index,
+            faiss_index_store=faiss_index_store,
         )
         user_prompt, included_chunks = build_prompt(
             eval_query.query, chunks_found, generation_settings.max_context_chars
@@ -124,7 +125,7 @@ def run_generation_evaluation(
         cleanup_eval_data(session, all_document_ids, owner_id)
         session.commit()
 
-    if owned_temp_index_path is not None and os.path.exists(owned_temp_index_path):
-        os.remove(owned_temp_index_path)
+    if owned_temp_index_dir is not None and os.path.exists(owned_temp_index_dir):
+        shutil.rmtree(owned_temp_index_dir)
 
     return summary

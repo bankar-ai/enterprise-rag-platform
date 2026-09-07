@@ -1,7 +1,7 @@
 import os
 
 from app.core.db import get_session_factory
-from app.embedding.index import FaissIndex
+from app.embedding.index import OwnerFaissIndexStore
 from app.evaluation.dataset import GOLDEN_QUERIES
 from app.evaluation.generation_runner import run_generation_evaluation
 from app.evaluation.models import GenerationEvaluationRunRecord
@@ -38,13 +38,13 @@ class _DiscriminatingFakeEmbeddingClient:
 
 
 def test_run_generation_evaluation_persists_and_cleans_up(tmp_path):
-    faiss_index = FaissIndex(str(tmp_path / "gen-eval.index"), dimension=32)
+    faiss_index_store = OwnerFaissIndexStore(str(tmp_path), dimension=32)
 
     summary = run_generation_evaluation(
         judge=_FixedFakeJudge(),
         llm_client=_FakeLLMClient(),
         embedding_client=_DiscriminatingFakeEmbeddingClient(),
-        faiss_index=faiss_index,
+        faiss_index_store=faiss_index_store,
     )
 
     assert summary.judge == "_FixedFakeJudge"
@@ -66,21 +66,23 @@ def test_run_generation_evaluation_persists_and_cleans_up(tmp_path):
 def test_run_generation_evaluation_builds_and_removes_its_own_temp_faiss_index_when_none_injected(
     monkeypatch,
 ):
-    """No `faiss_index` injected: the runner builds and later deletes its own temp-backed index."""
+    """No `faiss_index_store` injected: the runner builds and later deletes its own temp store."""
     monkeypatch.setattr(
         "app.evaluation.generation_runner.get_embedding_settings",
         lambda: type("S", (), {"dimension": 32})(),
     )
 
-    created_paths: list[str] = []
-    from app.embedding.index import FaissIndex as RealFaissIndex
+    created_dirs: list[str] = []
+    from app.embedding.index import OwnerFaissIndexStore as RealOwnerFaissIndexStore
 
-    class _TrackingFaissIndex(RealFaissIndex):
-        def __init__(self, path, dimension):
-            created_paths.append(path)
-            super().__init__(path, dimension)
+    class _TrackingOwnerFaissIndexStore(RealOwnerFaissIndexStore):
+        def __init__(self, index_dir, dimension):
+            created_dirs.append(index_dir)
+            super().__init__(index_dir, dimension)
 
-    monkeypatch.setattr("app.evaluation.generation_runner.FaissIndex", _TrackingFaissIndex)
+    monkeypatch.setattr(
+        "app.evaluation.generation_runner.OwnerFaissIndexStore", _TrackingOwnerFaissIndexStore
+    )
 
     run_generation_evaluation(
         judge=_FixedFakeJudge(),
@@ -88,5 +90,5 @@ def test_run_generation_evaluation_builds_and_removes_its_own_temp_faiss_index_w
         embedding_client=_DiscriminatingFakeEmbeddingClient(),
     )
 
-    assert len(created_paths) == 1
-    assert not os.path.exists(created_paths[0])
+    assert len(created_dirs) == 1
+    assert not os.path.exists(created_dirs[0])

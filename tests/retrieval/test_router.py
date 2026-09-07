@@ -27,7 +27,7 @@ def _stub_embedding_backend(monkeypatch, tmp_path):
     Same pattern as the ingestion router's tests — POST /retrieval/query uses production
     defaults with no injected fakes.
     """
-    monkeypatch.setenv("EMBEDDING_FAISS_INDEX_PATH", str(tmp_path / "retrieval_router_index.bin"))
+    monkeypatch.setenv("EMBEDDING_FAISS_INDEX_DIR", str(tmp_path / "retrieval_router_index"))
     get_embedding_settings.cache_clear()
 
     def _fake_embed(self, texts):

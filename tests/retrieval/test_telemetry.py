@@ -12,8 +12,8 @@ class _StubEmbeddingClient:
         return [[0.1, 0.2]]
 
 
-class _StubFaissIndex:
-    def search(self, vector, k):
+class _StubFaissIndexStore:
+    def search(self, owner_id, vector, k):
         return []
 
 
@@ -27,7 +27,7 @@ class _NoOpCache:
 
 class _StubSettings:
     dimension = 2
-    faiss_index_path = ":unused:"
+    faiss_index_dir = ":unused:"
 
 
 def test_search_produces_fuse_span_even_with_no_hits(monkeypatch):
@@ -42,7 +42,7 @@ def test_search_produces_fuse_span_even_with_no_hits(monkeypatch):
         owner_id=uuid.uuid4(),
         settings=_StubSettings(),
         embedding_client=_StubEmbeddingClient(),
-        faiss_index=_StubFaissIndex(),
+        faiss_index_store=_StubFaissIndexStore(),
         cache=_NoOpCache(),
     )
 

@@ -6,7 +6,7 @@ def test_defaults():
     assert settings.model == "nomic-embed-text"
     assert settings.dimension == 768
     assert settings.ollama_host.startswith("http")
-    assert settings.faiss_index_path
+    assert settings.faiss_index_dir
 
 
 def test_reads_env_vars(monkeypatch):
