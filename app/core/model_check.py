@@ -19,9 +19,21 @@ def list_available_models(ollama_host: str) -> list[str]:
     return [model.model for model in response.models if model.model is not None]
 
 
+def _resolves_to(model: str, installed: str) -> bool:
+    """Whether `model` (as passed to Ollama) would resolve to the exact installed tag `installed`.
+
+    Mirrors Ollama's own behavior: an untagged name (no `:`) resolves to its `:latest` tag, so
+    `"nomic-embed-text"` matches an installed `"nomic-embed-text:latest"` -- Ollama does NOT fall
+    back to any other tag, so `"qwen3"` does not match an installed `"qwen3:8b"`.
+    """
+    if model == installed:
+        return True
+    return ":" not in model and installed == f"{model}:latest"
+
+
 def check_model_available(ollama_host: str, model: str) -> bool:
-    """Return whether `model` (an exact tag, e.g. `"qwen3:8b"`) is installed at `ollama_host`."""
-    return model in list_available_models(ollama_host)
+    """Return whether `model` would resolve to an installed tag at `ollama_host` (see `_resolves_to`)."""
+    return any(_resolves_to(model, installed) for installed in list_available_models(ollama_host))
 
 
 def verify_model_or_raise(ollama_host: str, model: str, *, setting_name: str) -> None:
@@ -31,7 +43,7 @@ def verify_model_or_raise(ollama_host: str, model: str, *, setting_name: str) ->
     which env var to fix.
     """
     available = list_available_models(ollama_host)
-    if model in available:
+    if any(_resolves_to(model, installed) for installed in available):
         return
     raise ModelNotAvailableError(
         f"{setting_name}={model!r} is not installed on Ollama at {ollama_host!r}. "

@@ -54,6 +54,26 @@ def test_check_model_available_false_when_not_installed(monkeypatch):
     assert check_model_available("http://fake:11434", "qwen3") is False
 
 
+def test_check_model_available_true_when_untagged_name_resolves_to_installed_latest(monkeypatch):
+    """Mirrors Ollama's own resolution: an untagged name matches its installed `:latest` tag."""
+    monkeypatch.setattr(
+        "app.core.model_check.ollama.Client",
+        lambda host: _FakeOllamaClient(host, ["nomic-embed-text:latest"]),
+    )
+
+    assert check_model_available("http://fake:11434", "nomic-embed-text") is True
+
+
+def test_check_model_available_false_when_untagged_name_does_not_match_a_non_latest_tag(monkeypatch):
+    """An untagged name must NOT match an arbitrary installed tag -- only `:latest`."""
+    monkeypatch.setattr(
+        "app.core.model_check.ollama.Client",
+        lambda host: _FakeOllamaClient(host, ["qwen3:8b"]),
+    )
+
+    assert check_model_available("http://fake:11434", "qwen3") is False
+
+
 def test_verify_model_or_raise_passes_silently_when_installed(monkeypatch):
     monkeypatch.setattr(
         "app.core.model_check.ollama.Client",
