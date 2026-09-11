@@ -45,6 +45,29 @@ environment or other workloads, prefer a smaller model with real headroom (`gemm
 `qwen3:8b` on a 6GB card) or move generation to dedicated/serverless GPU hosting (see
 `D:\github-projects\infrastructure-options.md`) rather than fighting for local resources.
 
+## Traces (Grafana Cloud)
+
+ERP-028 instruments the whole RAG pipeline with OpenTelemetry, but the live deployment (ERP-037)
+has nowhere to run a local trace backend the way `docker-compose.yml`'s Jaeger service does for dev
+-- the `e2-micro` VM has no RAM headroom for another local service. ERP-038 instead points the app
+at Grafana Cloud's free tier (50GB traces/month, hosted, no self-hosting).
+
+`app/core/telemetry.py`'s `_build_span_exporter()` picks the OTLP exporter based on the standard
+`OTEL_EXPORTER_OTLP_PROTOCOL` env var -- `"grpc"` (default, unset) matches local Jaeger on port
+4317 unchanged; `"http/protobuf"` is what Grafana Cloud's OTLP gateway requires. See
+`.env.example` for the exact three env vars (`OTEL_EXPORTER_OTLP_ENDPOINT`/`_PROTOCOL`/`_HEADERS`)
+and the Python-specific `Basic%20` header-encoding quirk.
+
+**To look at a live trace**: log into Grafana Cloud, open stack `microstarfish1843`, go to
+**Explore**, select the **Tempo** datasource, and search by service name or trace ID. Each request
+that hits the RAG pipeline produces a trace with the hand-written pipeline spans
+(`embedding.generate`, `faiss.search`, `bm25.search`, `retrieval.fuse`/`rerank`/`expand_sections`,
+`llm.generate`) nested under the FastAPI request span -- this is the fastest way to see which stage
+was slow or failed for a real production request, without SSHing in to read raw journald output.
+
+Metrics and application logs are **not** exported this way yet (deliberately deferred, see
+ERP-039) -- this covers traces only.
+
 ## Cross-project infrastructure options
 
 Hosting/compute/database/GPU choices for making this platform (and future sibling projects)
